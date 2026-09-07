@@ -8,7 +8,7 @@ name: Build (No Signing)
 on:
   workflow_dispatch:
   push:
-    branches: [ "dlss-neural-rendering" ]
+    branches: [ "dlss-neural-rendering", "v6-en", "v6-mfgfix" ]
 #  pull_request:
 #    branches: [ "master" ]
     
@@ -22,7 +22,7 @@ env:
   BUILD_CONFIGURATION: Release
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
