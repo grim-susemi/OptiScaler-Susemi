@@ -1166,7 +1166,16 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     auto& state = State::Instance();
     auto config = Config::Instance();
 
-    if (state.isShuttingDown)
+    // Non-owner incoming XeFG present (T9-r3 Decision B): the backend owner check
+    // compares the FEATURE's chain, so a stale incoming This would still drive the
+    // live feature through fg->Present() below. Reject at this boundary — before
+    // frame accounting, callbacks, generic NR and fg->Present() — forwarding the
+    // original once with its HRESULT unchanged. The DX11 bridge presents the
+    // registered chain, so normal bridge routing still passes.
+    const bool nonOwnerXeFGPresent =
+        state.activeFgOutput == FGOutput::XeFG && This != state.currentFGSwapchain;
+
+    if (state.isShuttingDown || nonOwnerXeFGPresent)
     {
         if (pPresentParameters == nullptr)
             return o_FGSCPresent(This, SyncInterval, Flags);
