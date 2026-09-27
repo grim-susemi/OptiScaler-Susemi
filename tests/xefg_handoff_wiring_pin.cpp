@@ -21,8 +21,9 @@
 //     device and admit captures only while the finished consumer is available.
 //   - The runner (tests/run_xefg_production_route_smoke.ps1) re-runs this binary against
 //     disposable copies with the call site removed (must fail PIN_XEFG_CALLSITE), the
-//     bypass removed (must fail PIN_FG_BYPASS), and the Late device-identity refusal removed
-//     (must fail PIN_LATE_DEVICE). A seed that exits 0 means this pin no longer detects
+//     bypass removed (must fail PIN_FG_BYPASS), the Late device-identity refusal removed
+//     (must fail PIN_LATE_DEVICE), and the OwnedNrHandoff non-owner refusal removed
+//     (must fail PIN_XEFG_OWNER - the row-3b stale-proxy safety net). A seed that exits 0 means this pin no longer detects
 //     its defect.
 //
 // Usage: xefg_handoff_wiring_pin.exe [XeFG_Dx12.cpp] [FG_Hooks.cpp] [DlssNr_Dx12_Late.cpp]
@@ -302,6 +303,16 @@ int main(int argc, char** argv)
             present.find("dispatched && active && !paused") != std::string::npos;
         Pin(derivation, "PIN_XEFG_CALLSITE",
             "consumes must derive from dispatched, active and unpaused in Present");
+        // Stale-proxy safety net (Susemi row-3b contract): the handoff itself must refuse a
+        // non-owner instance, since the FGPresent bypass does not pre-filter it.
+        const std::string owned = FunctionBody(source, "XeFG_Dx12::OwnedNrHandoff()");
+        if (owned.empty())
+        {
+            std::printf("PIN_ENV: XeFG_Dx12::OwnedNrHandoff body not found in %s\n", xefgPath);
+            return 2;
+        }
+        Pin(owned.find("_swapChain != State::Instance().currentFGSwapchain") != std::string::npos,
+            "PIN_XEFG_OWNER", "OwnedNrHandoff must refuse a non-owner (stale) proxy instance");
     }
 
     // E. Actual FGHooks::FGPresent wiring, function-bounded: generic NR bypass + report.

@@ -12,8 +12,8 @@
 #
 # Sensitivity: the runner re-runs the same binary against disposable copies with
 # exactly one defect each - the OwnedNrHandoff() call site removed, the
-# !xefgOwnedHandoff bypass removed, the LateContext device-identity refusal removed.
-# Each seed MUST exit nonzero with its named marker; a seed that exits 0 means
+# !xefgOwnedHandoff bypass removed, the LateContext device-identity refusal removed,
+# the OwnedNrHandoff non-owner refusal removed. Each seed MUST exit nonzero with its named marker; a seed that exits 0 means
 # the pin no longer detects its defect.
 #
 # SUSEMI T9 ADAPTATION of the reviewed upstream-main T6 runner: the Late source is
@@ -179,6 +179,33 @@ $printed = Get-Content -LiteralPath (Join-Path $out 'seed_device.stdout.txt') -R
 if ($printed -notmatch 'PIN_LATE_DEVICE')
 {
     Write-Host 'XEFG production route pin: device seed missed its named marker PIN_LATE_DEVICE'
+    exit 1
+}
+
+# Seed D: the OwnedNrHandoff non-owner refusal removed (row-3b safety net). The
+# production check appears exactly once; removing it must fail named PIN_XEFG_OWNER.
+$seedD = Join-Path $out 'XeFG_Dx12.seedD.cpp'
+$text = Get-Content -LiteralPath $xefg -Raw
+$anchorD = 'if (_swapChain != State::Instance().currentFGSwapchain)'
+$hits = ([regex]::Matches($text, [regex]::Escape($anchorD))).Count
+if ($hits -ne 1)
+{
+    Write-Host "XEFG production route pin: owner seed anchor found $hits times, expected exactly 1"
+    exit 2
+}
+$text = $text.Replace($anchorD, 'if (false) /* SEED: owner check removed */')
+Set-Content -LiteralPath $seedD -Value $text -NoNewline
+$seedDCode = Invoke-Pin $exe @($seedD, $fgHooks, $late) 'seed_owner'
+Write-Host "XEFG production route pin: seed owner run exit=$seedDCode (expected nonzero PIN_XEFG_OWNER)"
+if ($seedDCode -eq 0)
+{
+    Write-Host 'XEFG production route pin: owner seed went green - the pin is not failure-provable'
+    exit 1
+}
+$printed = Get-Content -LiteralPath (Join-Path $out 'seed_owner.stdout.txt') -Raw
+if ($printed -notmatch 'PIN_XEFG_OWNER')
+{
+    Write-Host 'XEFG production route pin: owner seed missed its named marker PIN_XEFG_OWNER'
     exit 1
 }
 

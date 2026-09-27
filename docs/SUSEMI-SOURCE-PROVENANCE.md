@@ -1370,15 +1370,16 @@ was corrected (row 6); the rest is proven-equivalent by ported tests.
 | --- | --- | --- |
 | 1 | Handoff decision core: apply once per (generation, frameId); refuse duplicate/stale/unsubmitted/not-ready/cancelled/ambiguous; reset starts a new generation | `OptiScaler/dlssnr/DlssNr_XeFGHandoff.h` (donor lineage, contract-identical to T6; same `Tracker`/`Identity`/`Outcome`/`SkipReason` API). Pinned by existing `tests/xefg_handoff_smoke.cpp` + ported `tests/xefg_handoff_wiring_pin.cpp` §A |
 | 2 | `XeFG_Dx12::Present` publishes `PublishFinishedConsumerState(consumes)` then calls `OwnedNrHandoff()` under `if (consumes)`; `consumes = dispatched && active && !paused` | `OptiScaler/framegen/xefg/XeFG_Dx12.cpp:1559-1563` (present since donor; untouched by T9). Pinned §D; removal seed fails `PIN_XEFG_CALLSITE` |
-| 3 | `FGHooks::FGPresent` bypasses generic `ApplyToFinishedPicture` on the owned route and reports `NR_XEFG_PRESENT` via `XeFGHandoffSince` | `OptiScaler/hooks/FG_Hooks.cpp:1290-1304,1368-1375` (present since donor; untouched). Pinned §E; removal seed fails `PIN_FG_BYPASS` |
-| 4 | Queue/device identity: never run NR on stale or cross-queue input | EXCEPTION — Susemi has no `DlssNr_QueueIdentity.h` / `DlssNr_Late.inl` unwrap helper. Equivalent protection: `FinishedInputReady` same-queue rule (`OptiScaler/dlssnr/DlssNr_FinishedReady.h`) + `LateContext::Acquire` device-identity refusal (`OptiScaler/shaders/dlssnr/DlssNr_Dx12_Late.cpp:67`) + capture admission gate (`FinishedConsumerAdmitsCapture`, same file `:142,:212`). Pinned §B/§F; device-gate removal seed fails `PIN_LATE_DEVICE` |
+| 3 | `FGHooks::FGPresent` bypasses generic `ApplyToFinishedPicture` on the owned route and reports `NR_XEFG_PRESENT` via `XeFGHandoffSince` | `OptiScaler/hooks/FG_Hooks.cpp:1290-1304` bypass + `:1363-1375` owner-gated report (present since donor; untouched). Pinned §E; removal seed fails `PIN_FG_BYPASS`. Route boundary differs from T6 — see EXCEPTION row 3b |
+| 3b | EXCEPTION — owned-route boundary is wider than T6 by Susemi compatibility design (no production change in T9) | T6 (`a369d6b4:FG_Hooks.cpp:1247-1251`) qualifies the owned route with native `swapchainInteropApi == None` AND `This == currentFGSwapchain`; Susemi (`FG_Hooks.cpp:1290-1292`) qualifies only `willPresent && fgFeatureActive && activeFgOutput == XeFG`. Likewise T6 `OwnedNrHandoff` (`a369d6b4:XeFG_Dx12.cpp:1518-1519`) refuses interop, while Susemi (`XeFG_Dx12.cpp:1652-1658`) refuses only non-owner (`NotOwner` + diagnostic). Contract evidence that the wider boundary is load-bearing, not an omission: (a) the XeFG backend never consults interop (zero `swapchainInteropApi` references in `XeFG_Dx12.cpp`) — Dispatch/Present run identically in every interop mode; (b) Susemi FGPresent explicitly serves NR under interop (`FG_Hooks.cpp:1216-1226` selects the NR command queue by interop mode), a path minimal upstream main does not have; (c) the Susemi comment at `FG_Hooks.cpp:1283-1285` states generic apply `knows nothing of the accepted application frame`, so routing interop XeFG presents to generic (the T6-predicate outcome) would mis-compose; (d) the safety net moved, not removed: a stale-proxy present skips generic AND is refused at `OwnedNrHandoff` with a named `NotOwner` diagnostic, and the `NR_XEFG_PRESENT` report itself is owner-gated (`FG_Hooks.cpp:1363`) — no NR is applied for a stale proxy in either tree. Observable divergence (documented limitation): on a stale-proxy present T6 runs generic apply while Susemi refuses and applies nothing; under interop `!= None` with XeFG output Susemi takes the owned route where T6 takes generic. The ported §E pin asserts bypass presence/order and the §D addendum pins the non-owner refusal (`PIN_XEFG_OWNER`, removal seed fails named); neither simulates a live interop/stale present (no GPU) — that boundary rests on the source contract above, not a runtime seed |
+| 4 | Queue/device identity: never run NR on stale or cross-queue input | Susemi normalizes WITHOUT an unwrap helper (no `DlssNr_QueueIdentity.h` / `DlssNr_Late.inl` — that absence is the structural difference vs T6). Actual normalization paths: de-proxy with original-queue fallback `DlssNr_Dx12.cpp:826-828` and `DlssNr_Dx12_FinishedCompose.cpp:14-18` (`if (!CheckForRealObject(...)) realQueue = queue`); stored identity via `NormalizedCommandIdentity` (`DlssNr_LateSlot.h:196-206`) at promise (`DlssNr_Dx12_FinishedQueue.cpp:87-89`) and submit (`:160-178`, token-gated promise consumption); readiness rejects incomplete cross-queue input and `UINT64_MAX` (`DlssNr_FinishedReady.h`); capture admission gated (`FinishedConsumerAdmitsCapture`, `DlssNr_Dx12_Late.cpp:142,212`). The `LateContext::Acquire` device-identity refusal (`:67`) is a SEPARATE device gate, not queue normalization. Pinned §B (real `FinishedInputReady` literals) + §F (Acquire/admission scans); device-gate removal seed fails `PIN_LATE_DEVICE` |
 | 5 | Reset / swapchain recreation drops identity+interval state, closes stale captures | `XeFG_Dx12::ResetNrHandoff` (`XeFG_Dx12.cpp:1584`) + `Tracker::Reset` (present since donor; untouched). Pinned §A `PIN_TRACKER_STALE` |
 | 6 | Native unlock: default OFF; unrecognised provider build refuses BEFORE any byte write and without pacing (fail-closed T7 adaptation vs warn-and-continue) | **T9 parity fix**: `OptiScaler/proxies/XeFGUnlock.h` previously warned and kept patching on per-byte checks (donor behaviour); now refuses with `unrecognised provider build ..., refusing to patch` and returns before any write/pacing. Same `KnownBuildStamp 0x69CB0F4D` / `KnownSizeOfImage 0x015ED000` as T7. Pinned `tests/xefg_unlock/UnlockPacingTests.cpp` F1 (OFF) + F4 (bad stamp) |
-| 7 | Pacing: `ExtraPacing` switch, thunk rewrite with rollback, `Dispatch` feeds `RenderTimeMs` / reports `NoteFedFrameTime` | `OptiScaler/proxies/XeFGPacing.h` + `XeFG_Dx12.cpp:1065,1087` (present since donor; untouched). Pinned F6-F8 + §C; Install/feed removal seeds fail named |
+| 7 | Pacing: `ExtraPacing` switch, thunk hook with graceful degradation, `Dispatch` feeds `RenderTimeMs` / reports `NoteFedFrameTime`; unlock patch table rolls back | `OptiScaler/proxies/XeFGPacing.h` + `XeFG_Dx12.cpp:1065,1087` (present since donor; untouched). CORRECTION of the earlier row text: all-or-nothing rollback belongs to the UNLOCK patch table (`XeFGUnlock.h`: any write-verify failure rolls back every earlier patch). `XeFGPacing::Install` (`XeFGPacing.h:924-1029`) instead retains the successful present-thunk hook (`g_enabled = true`) and degrades the OPTIONAL scheduler/timestamp hooks to wall-clock/null (`no scheduler, falling back to the wall clock`) — present-hook failure alone refuses. Pinned F6-F8 + §C; Install/feed removal seeds fail named |
 | 8 | `XeFGProxy::HookXeFG` calls `XeFGUnlock::Apply` before any export lookup | `OptiScaler/proxies/XeFG_Proxy.h:176` (present since donor; untouched). Pinned §C; removal seed fails `PIN_APPLY_ORDER` |
 | 9 | Ownership: only the registered app-facing proxy publishes consumer state; aborted/non-owner release publishes nothing; default route admits captures | `OptiScaler/dlssnr/DlssNr_FinishedConsumer.h:68-95` (equivalent, donor lineage; untouched). Pinned §C |
 | 10 | Defaults/limits: `UnlockMFG` OFF, `MaxInterpolatedFrames` 5 (bound 31), ini ships `auto`, menu offers both checkboxes | `OptiScaler/Config.h:696,705-707`, `OptiScaler.ini:250-258`, `OptiScaler/menu/menu_common.cpp:4541,4554` (untouched). Pinned §D literals |
-| 11 | Diagnostic markers `NR_XEFG_APPLY` / `NR_XEFG_SKIP` / `NR_XEFG_PRESENT` (+ device gate) preserved at default log level | Present in `XeFG_Dx12.cpp` / `FG_Hooks.cpp` (donor diagnostic set kept; no new per-frame spam added by T9) |
+| 11 | Diagnostic markers `NR_XEFG_APPLY` / `NR_XEFG_SKIP` / `NR_XEFG_PRESENT` preserved without log expansion | Present in `XeFG_Dx12.cpp` / `FG_Hooks.cpp` (donor set kept; no per-frame spam added by T9). Precise levels (`XeFG_Dx12.cpp:46-56,60-103`): `NR_XEFG_SKIP` first 8 per process at INFO then DEBUG (shared budget); `NR_XEFG_GATE` (gate-state diagnostics incl. `not_owner`) always DEBUG, edge-triggered + first-8/every-512th budget — NOT a default-INFO marker |
 
 Ported production-bound tests (adapted, not wholesale):
 `tests/xefg_handoff_wiring_pin.cpp`, `tests/run_xefg_production_route_smoke.ps1`,
@@ -1387,14 +1388,38 @@ Ported production-bound tests (adapted, not wholesale):
 Adaptations vs T6/T7 originals: Late path is `DlssNr_Dx12_Late.cpp` (no `.inl`);
 §B drops COM-doubles for the absent QueueIdentity helper (row 4 exception);
 §D derivation check matches Susemi's `Dispatch()`/`IsActive()`/`IsPaused()` locals;
-§F pins the device-identity refusal + admission gates instead of unwrap sites.
+§F pins the device-identity refusal + admission gates instead of unwrap sites;
+§D addendum pins the `OwnedNrHandoff` non-owner refusal (row-3b safety net,
+removal seed fails `PIN_XEFG_OWNER`).
 Each file header names its adaptation.
 
 T9 verification (this commit): clean `Rebuild Release x64` after the last
 source edit, `tests/run_xefg_production_route_smoke.ps1` exit 0,
 `tests/xefg_unlock/run.ps1` exit 0, full `tests/run_nr_prerelease.ps1` exit 0 —
-raw exits captured in the task-9 receipt; every removal seed exits nonzero
-with its named marker. Source→object→DLL hash binding recorded there.
+raw outputs, outer process exits and per-seed results saved per verification
+round in `task-9/` (first round) and `task-9/repair-r2/` (final round after the
+last edit); every removal seed exits nonzero with its named marker.
+Source→object→DLL hash binding recorded there.
+
+### 9a. T9 current-source hash record (scope: exactly the T9 delta)
+
+SHA-256 of worktree bytes at the T9 repair-r2 commit. The §3 table keeps the
+historical R/donor snapshot hashes (e.g. Unlock `e6de23a9…` at line 500);
+this table records the CURRENT bytes, so a verifier can distinguish history
+from the live tree. Text files are stored LF-normalized under the committed
+`.gitattributes`; `git cat-file -p HEAD:<path> | sha256sum` equals the row
+hash for LF-clean files.
+
+| path | sha256 (worktree bytes) | note |
+| --- | --- | --- |
+| `OptiScaler/proxies/XeFGUnlock.h` | `3afb75f98bad71f9ebd5e828d0cebc6c996570e3c42265599c3647dfecd7fd02` | T9 fail-closed fix (row 6); supersedes donor bytes hashed in §3 |
+| `tests/xefg_handoff_wiring_pin.cpp` | `4feff2d055588d0c6c7bb8c05e4adebf8b029fa0446202ec86b62746173f502a` | new T9 port (adapted; §D addendum + seed-D anchor) |
+| `tests/run_xefg_production_route_smoke.ps1` | `262333ba2d543d5b4f5a72562c410df238786c5f63a8d78af65d9b155d8106e9` | new T9 port (adapted; seeds A-D) |
+| `tests/xefg_unlock/UnlockPacingTests.cpp` | `6b6bb19c25ad2b67e7981322dc678eea9e82fb9237833de23ea2499cebccee14` | new T9 port (byte-equivalent to approved T7 modulo newlines) |
+| `tests/xefg_unlock/run.ps1` | `9ce3bb6d4c3f1bed0a73feb80a0bc0e15ff8cdfa003bf31095e10fdd86c06a66` | new T9 port (byte-equivalent to approved T7 modulo newlines) |
+| `tests/xefg_unlock/stubs/Config.h` | `e1b07dc0fd1a6227dc0776174f172e4a8a5280ea882933fad0da4418af7fe62d` | new T9 test-only stub |
+| `tests/xefg_unlock/stubs/Logger.h` | `1a192b616b0990caeef9b5675dbbdc15892bc711373d8d3b15572615825c160b` | new T9 test-only stub |
+| `tests/xefg_unlock/stubs/SysUtils.h` | `1b44f826a8ba1faea030241b75c366a8ef39cd469bc7fbd1900c5575c4348afd` | new T9 test-only stub |
 
 ## 8. How to re-verify
 
