@@ -36,6 +36,11 @@
 // every write by read-back, and roll the whole set back if any single step
 // fails. A failed unlock is not fatal - the provider just behaves as it always
 // did.
+//
+// T9 adaptation (reviewed upstream main T7): an unrecognised provider build
+// identity refuses BEFORE any byte is written and before pacing is installed
+// (fail-closed). The per-byte expected-bytes checks below remain as defence in
+// depth for recognised-identity images.
 
 #include "SysUtils.h"
 #include "Logger.h"
@@ -72,11 +77,18 @@ class XeFGUnlock
             return false;
         }
 
+        // Fail-closed identity gate (T9, matches reviewed upstream main T7):
+        // refuse before any write and before pacing install. An unknown build
+        // may have moved every patch offset, so per-byte checks alone are not
+        // sufficient consent to patch.
         if (nt->FileHeader.TimeDateStamp != KnownBuildStamp || nt->OptionalHeader.SizeOfImage != KnownSizeOfImage)
-            LOG_WARN("XeFG unlock: unrecognised provider build {:#010x}/{:#x}, relying on per-byte checks",
+        {
+            LOG_WARN("XeFG unlock: unrecognised provider build {:#010x}/{:#x}, refusing to patch",
                      nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage);
-        else
-            LOG_INFO("XeFG unlock: recognised provider build {:#010x}", KnownBuildStamp);
+            return false;
+        }
+
+        LOG_INFO("XeFG unlock: recognised provider build {:#010x}", KnownBuildStamp);
 
         int32_t maxInterp = Config::Instance()->FGXeFGMaxInterpolatedFrames.value_or_default();
 
