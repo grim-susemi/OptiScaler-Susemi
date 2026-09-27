@@ -1,7 +1,8 @@
 # Package OptiScaler and its ordinary dependencies, including the built-in NR backend.
 # NVIDIA model/FG runtimes and unrelated optional payloads are never collected from build folders.
-# The pinned RTX 20/30 (SM75/SM86) MFG payload ships only behind -IncludeAmpereMfg together with an
-# explicit -AcceptAmpereMfgLicenses; it is taken from vendor/dlssg_sm86 (the pin), never from build output.
+# T5 A-only: the RTX 20/30 (SM75/SM86) MFG payload is never shipped - -IncludeAmpereMfg is refused
+# with or without -AcceptAmpereMfgLicenses. The staged UAL binary is verified against the official
+# v9.7.4 inner pin before staging (see tools/Install-PinnedUAL.ps1).
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
     [string]$Version = 'nr-dev',
@@ -13,20 +14,30 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSCommandPath
-# Bundling the pinned SM75/SM86 payload requires the explicit accept switch (upstream switch
-# semantics). Checked before the output-exists guard so the identical command minus the switch
-# refuses with the license message and leaves an existing artifact byte-identical.
-if ($IncludeAmpereMfg -and -not $AcceptAmpereMfgLicenses) {
-    throw 'Bundling the pinned RTX 20/30 (SM75/SM86) MFG payload requires -AcceptAmpereMfgLicenses. Review vendor/dlssg_sm86/THIRD_PARTY_NOTICES.txt and docs/rtx2030-payload-contract.md first.'
+# T5 A-only gate: the RTX 20/30 (SM75/SM86) MFG payload variant is not distributed from this
+# worktree - no affirmative redistribution rights were found (vendor/dlssg_sm86/THIRD_PARTY_NOTICES.txt,
+# docs/rtx2030-payload-contract.md). Refuse with or without -AcceptAmpereMfgLicenses, before the
+# output-exists guard and before staging, so no B output is ever staged. vendor/dlssg_sm86/PIN.json
+# stays as historical hash information only.
+if ($IncludeAmpereMfg) {
+    throw 'Refusing: the RTX 20/30 (SM75/SM86) MFG payload variant is not shipped (no redistribution rights). -IncludeAmpereMfg is rejected with or without -AcceptAmpereMfgLicenses; no B output was staged.'
 }
-$flavour = if ($IncludeAmpereMfg) { '-with-sm86-mfg' } else { '' }
-$stage = Join-Path $root "release/$Version$flavour"
-$zip = Join-Path $root "release/OptiScaler-NR-$Version$flavour.zip"
+# T5 pinned-loader gate: the staged UAL binary must be the independently verified official v9.7.4
+# inner dinput8.dll (fetched via tools/Install-PinnedUAL.ps1, which checks the outer ZIP pin first).
+# Refuse a missing or tampered loader before staging.
+$UalInnerSha256 = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
+$ualPath = Join-Path $root 'tools/asi-loader/Ultimate-ASI-Loader-x64.dll'
+if (-not (Test-Path -LiteralPath $ualPath -PathType Leaf)) {
+    throw "Pinned UAL is missing: $ualPath. Run tools/Install-PinnedUAL.ps1 to fetch and verify it."
+}
+$ualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ualPath).Hash.ToLowerInvariant()
+if ($ualHash -ne $UalInnerSha256) {
+    throw "Pinned UAL mismatch: $ualPath sha256=$ualHash, expected $UalInnerSha256. Refusing before staging."
+}
+$stage = Join-Path $root "release/$Version"
+$zip = Join-Path $root "release/OptiScaler-NR-$Version.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)) {
     throw 'Release output already exists. Choose a new -Version; existing packages are not overwritten.'
-}
-if ($IncludeAmpereMfg) {
-    Write-Warning 'The RTX 20/30 (SM75/SM86) MFG payload is bundled from vendor/dlssg_sm86 (self-signed third-party module); its notices are staged with the package.'
 }
 
 if (-not $SkipBuild) {
@@ -83,6 +94,21 @@ function Write-StalePairReport {
     }
 }
 Write-StalePairReport -ObjectPath $objPath -DllPath (Join-Path $buildRoot 'OptiScaler.dll')
+# T5 fail-closed -SkipBuild: a skipped build cannot smuggle an unverified (missing or stale) DLL
+# into a new ZIP. A fresh full build above already re-linked the DLL, so this only fires for
+# -SkipBuild. The flavour assertion above is unchanged (tests/run_flavour_gate_negative.ps1
+# exercises its live block).
+if ($SkipBuild) {
+    $skipDll = Join-Path $buildRoot 'OptiScaler.dll'
+    if (-not (Test-Path -LiteralPath $skipDll -PathType Leaf)) {
+        throw "Unverified -SkipBuild: built DLL is missing: $skipDll. Rebuild without -SkipBuild."
+    }
+    $dllTime = (Get-Item -LiteralPath $skipDll).LastWriteTimeUtc
+    $objTime = (Get-Item -LiteralPath $objPath).LastWriteTimeUtc
+    if ($dllTime -lt $objTime) {
+        throw ("Unverified -SkipBuild: OptiScaler.dll (mtime={0:o}) predates the flavour-probe object (mtime={1:o}); the DLL may be stale. Rebuild without -SkipBuild." -f $dllTime, $objTime)
+    }
+}
 # Validate every source before creating the staging tree. An explicit manifest prevents stale
 # Streamline/MFG, removed NR helpers or discarded experiment files entering this package.
 $files = @{}
@@ -91,7 +117,9 @@ $files = @{}
 $files['OptiScaler.dll'] = Join-Path $buildRoot 'OptiScaler.dll'
 $files['docs/RELEASE-v0.8.8.md'] = Join-Path $root 'docs/RELEASE-v0.8.8.md'
 # H10 (owner decision, followups plan T4): the r3 Korean release note ships inside the zip.
+# T3 load-order doc ships byte-equal inside the ZIP (T5).
 $files['docs/RELEASE-NOTES-r3-KO.md'] = Join-Path $root 'docs/RELEASE-NOTES-r3-KO.md'
+$files['docs/XEFG-NR-RESHADE-LOAD-ORDER.md'] = Join-Path $root 'docs/XEFG-NR-RESHADE-LOAD-ORDER.md'
 foreach ($name in @('OptiScaler.ini', 'setup_windows.bat', 'setup_linux.sh', 'Streamline_fetcher_windows.bat', 'Install_AsiLoader_windows.bat', 'README.md', 'INSTALL-KO.md', 'INSTALL-DLSSNR.md', 'LICENSE',
                     'Features.md', 'Config.md', 'Spoofing.md',
                     'CONTRIBUTING.md', 'OptiScaler/dlssnr/README.md')) {
@@ -117,21 +145,7 @@ $files['Licenses/RenoDX_ATTRIBUTION.txt'] = Join-Path $root 'Licenses/RenoDX_ATT
 if ($EnableRtx40Mfg) {
     $files['Licenses/MFGUnlock_LICENSE.txt'] = Join-Path $root 'Licenses/MFGUnlock_LICENSE.txt'
 }
-if ($IncludeAmpereMfg) {
-    # Payload module name comes from the pin the todo-2 probe wrote; never hardcoded here and never
-    # collected from a build folder. The notices file ships next to the module and under Licenses/.
-    $pinPath = Join-Path $root 'vendor/dlssg_sm86/PIN.json'
-    if (-not (Test-Path -LiteralPath $pinPath)) { throw "Payload pin is missing: $pinPath" }
-    $bundledName = (Get-Content -LiteralPath $pinPath -Raw | ConvertFrom-Json).bundled_name
-    if (-not $bundledName -or $bundledName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
-        throw "The payload pin has an invalid bundled_name: '$bundledName'"
-    }
-    $sm86 = Join-Path $root 'vendor/dlssg_sm86'
-    $files["OptiScaler/dlssg_sm86/$bundledName"] = Join-Path $sm86 'dlssg_sm86.dll'
-    $files['OptiScaler/dlssg_sm86/dlssg_sm86.ini'] = Join-Path $sm86 'dlssg_sm86.ini'
-    $files['OptiScaler/dlssg_sm86/THIRD_PARTY_NOTICES.txt'] = Join-Path $sm86 'THIRD_PARTY_NOTICES.txt'
-    $files['Licenses/DLSSG_SM86_THIRD_PARTY_NOTICES.txt'] = Join-Path $sm86 'THIRD_PARTY_NOTICES.txt'
-}
+# A-only: no SM75/SM86 payload members are ever staged (see the -IncludeAmpereMfg refusal above).
 foreach ($name in @('CREDITS.md', 'NR-COMPATIBILITY.md', 'NR-MOTION-METADATA.md', 'NR-PIPELINE-UI.md', 'NR-FINISHED-BRIDGES.md',
                     'DEFERRED-NR-DLSS.md',
                     'NR-DLSS-ENLARGEMENT.md', 'NR-GPU-RETIREMENT.md', 'NR-NATIVE-STREAMLINE-PRESENT.md',

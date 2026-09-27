@@ -22,6 +22,9 @@ jobs:
           submodules: true
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
+      - name: Fetch pinned UAL
+        shell: powershell
+        run: ./tools/Install-PinnedUAL.ps1
       - name: Package
         shell: powershell
         env:
