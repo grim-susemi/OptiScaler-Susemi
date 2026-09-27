@@ -4,11 +4,11 @@ This package carries the OptiScaler NR build (wilsjo2 base with the RTX 40 MFG u
 
 NR is experimental and disabled by default. Do not use injection mods in anti-cheat-protected multiplayer games.
 
-Korean guide: [INSTALL-KO.md](INSTALL-KO.md).
+Korean guide: [INSTALL-KO.md](INSTALL-KO.md). For the scoped ReShade-first XeFG finished-picture NR setup, see [load order and rollback](docs/XEFG-NR-RESHADE-LOAD-ORDER.md).
 
 The optional [RTX 40 MFG unlock](docs/RTX40-MFG.md) needs an unlock-enabled build (this one) and its runtime toggle, which still defaults off.
 
-The optional RTX 20/30 (SM75/SM86) MFG unlock ships the sdli1995 payload for Turing and Ampere cards. The section below covers its requirements, the 1..5 multiplier mapping, the 6X caveat and the uninstall steps.
+The historical v11.1 B variant shipped the RTX 20/30 (SM75/SM86) MFG payload for Turing and Ampere cards. The new A-only candidate does not. The section below retains the historical requirements, 1..5 multiplier mapping, 6X caveat and uninstall steps.
 
 ## Quick start
 
@@ -21,7 +21,7 @@ The optional RTX 20/30 (SM75/SM86) MFG unlock ships the sdli1995 payload for Tur
 5. Optional, Neural Rendering: place `nvngx_dlssnr.dll` beside the game executable, then enable NR in the overlay and start with one pass. See [Requirements](#requirements).
 6. Optional, frame-generation runtime: run `Streamline_fetcher_windows.bat` to download NVIDIA's official Streamline release into `OptiScaler\streamline`; do this only when the game does not already provide a suitable runtime.
 7. Optional, RTX 40 (Ada) MFG unlock: enable **RTX 40 MFG unlock (restart)** under frame-generation settings, save and restart. RTX 40 only, and it needs a supported DLSSG runtime.
-8. Optional, RTX 20/30 MFG unlock: enable **Enable SM75/SM86 MFG (experimental; restart)** under frame-generation settings, save and restart. RTX 20/30 only; the payload ships with this build, so there's nothing extra to download. See [RTX 20/30 (SM75/SM86) MFG unlock](#rtx-2030-sm75sm86-mfg-unlock-optional) below.
+8. Optional, RTX 20/30 MFG unlock: the historical v11.1 B package included a third-party payload. The new A-only release candidate does not bundle it or offer a supported install path. See [the release boundary](#rtx-2030-sm75sm86-mfg-unlock-optional) below.
 9. Removal: run `Remove_OptiScaler.bat` (created by `setup_windows.bat`), and `Install_AsiLoader_windows.bat` -> `[4]` to remove the ASI loader; it restores the file it backed up.
 
 On upgrades, replace the **proxy the game loads**: adding `OptiScaler.dll` beside an old `dxgi.dll` does not update it. Preserve your INI and other mods' loaders.
@@ -83,13 +83,13 @@ For native Vulkan, enable NR in the INI before launch so device/swapchain suppor
 
 ## RTX 20/30 (SM75/SM86) MFG unlock (optional)
 
-This build bundles the `sdli1995/dlssg_for_sm86` payload (v0.3.5) for RTX 20 (Turing, SM75) and RTX 30 (Ampere, SM86) cards. The module ships inside the package at `OptiScaler\dlssg_sm86\` and OptiScaler loads it at game start: there's no extra download and no manual sideload step. Keep that folder when you extract the package.
+**New A-only candidate:** the `sdli1995/dlssg_for_sm86` B payload, NVIDIA runtime and derived SM75 kernels are not bundled. No redistribution rights have been established for this payload, so don't copy it from an older ZIP or sideload it as a workaround. The code and settings below describe the historical v11.1 B variant, not an installation step for the new candidate. The old v11.1 B guide said "ships with this build" and "no manual sideload"; neither claim describes the A-only candidate. The A-only package has no `OptiScaler\dlssg_sm86\dlssg_sm86.dll`.
 
 ### Requirements
 
 - **RTX 20 or RTX 30 only** (Turing SM75, Ampere SM86). On RTX 40 use the [RTX 40 MFG unlock](docs/RTX40-MFG.md) instead; the two unlockers must never be active together.
 - **Driver R580 or newer recommended.** Older drivers aren't refused, but R580+ is the baseline the payload's author reports.
-- **The payload ships with this build**, so there's nothing to fetch: `OptiScaler\dlssg_sm86\dlssg_sm86.dll`, its companion `dlssg_sm86.ini` and `THIRD_PARTY_NOTICES.txt` are all in the package.
+- **Historical v11.1 B only:** that ZIP carried `OptiScaler\dlssg_sm86\dlssg_sm86.dll`, its companion `dlssg_sm86.ini` and `THIRD_PARTY_NOTICES.txt`. These files are absent from the new A-only candidate.
 - A game whose frame generation runs through NVIDIA Streamline. The payload hands its generated frames to the game's own DLSS-G plugin, so the game's FG menu picks the multiplier.
 - The unlock is off by default, and changing it needs a restart.
 
@@ -97,7 +97,7 @@ This build bundles the `sdli1995/dlssg_for_sm86` payload (v0.3.5) for RTX 20 (Tu
 
 In the menu, under frame-generation settings, open the **RTX 20 / 30 (SM75 / SM86) MFG unlock** section:
 
-1. Tick **Enable SM75/SM86 MFG (experimental; restart)**. External FG turns on with it, and the game's own FG menu then selects the multiplier.
+1. Historical B only: tick **Enable SM75/SM86 MFG (experimental; restart)**. External FG turns on with it, and the game's own FG menu then selects the multiplier. This does not install a payload in the A-only candidate.
 2. Set **Max Generated Frames** (1 to 5) if you want more than the default 4X.
 3. Pick a **Kernel Image** only if Auto misbehaves: Auto resolves the format from your card, PTX is the safe choice on RTX 20, and Cubin needs an exact physical match on Windows.
 4. Optional, RTX 30 only: **Hardware Bilinear** trades exact output for about 2 to 4 percent lower GPU latency.
@@ -137,9 +137,9 @@ Every setting here is read once, at startup. Save Settings and restart the game;
 
 ### Attribution
 
-The bundled payload is `sdli1995/dlssg_for_sm86` v0.3.5 (pinned commit `9621db5`), shipped unmodified from https://github.com/sdli1995/dlssg_for_sm86
+The historical v11.1 B bundled payload was `sdli1995/dlssg_for_sm86` v0.3.5 (pinned commit `9621db5`), shipped unmodified from https://github.com/sdli1995/dlssg_for_sm86
 
-NVIDIA's runtime and model components and the SM75 kernel family inside that payload carry their own terms. The upstream notices ship with the package as `OptiScaler\dlssg_sm86\THIRD_PARTY_NOTICES.txt`, plus a copy under `Licenses\`. Upstream states GPLv3 in prose but the repository carries no `LICENSE` file; that licensing gap is recorded here instead of being hidden. The payload is self-signed (`CN=DLSSG for SM86`), so SmartScreen shows an unknown publisher.
+NVIDIA's runtime and model components and the SM75 kernel family inside that payload carry their own terms. The historical B package carried upstream notices as `OptiScaler\dlssg_sm86\THIRD_PARTY_NOTICES.txt`, plus a copy under `Licenses\`. Upstream states GPLv3 in prose but the repository carries no `LICENSE` file; that licensing gap is recorded here instead of being hidden. The payload is self-signed (`CN=DLSSG for SM86`), so SmartScreen shows an unknown publisher.
 
 ## Placement and resolution
 
@@ -189,7 +189,7 @@ Three caveats:
 - The bundled XeFG SDK supports HDR10 (`R10G10B10A2_UNORM`) only: no FP16/scRGB.
 - frames_presented counts submitted pictures, not verified scanout.
 
-These placement paths are not verified in-game on this machine: it has no RTX 20/30 hardware and runs no XeFG session. The owner runs the in-game acceptance.
+These placement paths are not verified in-game on this machine: it has no RTX 20/30 hardware and runs no XeFG session. The owner runs the in-game acceptance. For a scoped ReShade-first setup, see [load order and byte-exact rollback](docs/XEFG-NR-RESHADE-LOAD-ORDER.md); this R2 candidate has not been game-verified.
 
 ## Files in this package
 
@@ -211,6 +211,6 @@ Enable `[Log] LogToFile=true` and `LogLevel=2`, then enter a rendered scene.
 - **Menu opens but ignores input:** try `[Hotfix] ManualInputPolling=true` and disable conflicting overlays.
 - **Model initialization fails:** check runtime hash and driver support; include the exact log error in a report.
 - **Unexpected model size:** inspect active/target/model dimensions and fallback messages; [padded input](docs/PADDED-PRESR.md) explains supported rectangles.
-- **XeFG together with ReShade:** the proxy method can collide with other injectors; use the ASI method above.
+- **XeFG together with ReShade:** the proxy method can collide with other injectors. The ASI method alone doesn't establish load order. Follow the [scoped ReShade-first procedure](docs/XEFG-NR-RESHADE-LOAD-ORDER.md), or stop if its preconditions don't hold.
 
 Follow [upstream OptiFG guidance](https://github.com/optiscaler/OptiScaler/wiki/OptiFG) for frame generation. NR success alone does not establish FG compatibility. See [tested games and remaining issues](docs/NR-UPSTREAM-REVIEW.md).
