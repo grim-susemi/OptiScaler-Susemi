@@ -1,5 +1,7 @@
 # 설치 안내 (한국어)
 
+[수세미 안정판 최신 릴리스 (현재 v11.1)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)와 [실험판 v11.2-rc1 직접 페이지](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc1)는 다릅니다. 실험판은 아직 게시되지 않았을 수 있습니다. 새 후보는 A-only이며 [후보 범위와 소스 출처](docs/RELEASE-v11.2-rc1.md)를 먼저 확인하세요. 게시 전에는 다운로드 파일이나 해시가 없습니다.
+
 이 패키지는 OptiScaler NR 빌드(wilsjo2 v0.8.8 기반, RTX 40 MFG 언락 포함)에 한국어 메뉴 번역과 두 가지 도우미(ASI 로더, Streamline 페처)를 더한 것입니다.
 
 - NR(뉴럴 렌더링)은 실험 기능이며 **기본 꺼짐**입니다.

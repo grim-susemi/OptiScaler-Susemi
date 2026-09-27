@@ -38,11 +38,15 @@
 </div>
 
 
+## Susemi downloads
+
+[Susemi stable release (latest, currently v11.1)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) is separate from the [experimental v11.2-rc1 direct-tag page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc1). The experimental link may not have a published release yet. Its planned package is A-only; see the [candidate scope and provenance](docs/RELEASE-v11.2-rc1.md). The OptiScaler upstream download badges above are not Susemi downloads.
+
 ## Neural Rendering on this branch
 
 The [built-in RTX 40 MFG unlock](docs/RTX40-MFG.md) is an optional build feature, excluded by default and separate from the upstream NR proposal.
 
-Optional [RTX 20/30 (SM75/SM86) MFG unlock](INSTALL-DLSSNR.md): the sdli1995 payload for Turing and Ampere cards ships inside this build. RTX 20/30 MFG 언락 안내는 [INSTALL-KO.md](INSTALL-KO.md)의 같은 절을 보세요.
+The [RTX 20/30 (SM75/SM86) MFG unlock guide](INSTALL-KO.md#rtx-2030-sm75sm86-mfg-언락-선택) describes the historical v11.1 B asset. The new experimental A-only candidate does not redistribute that payload or NVIDIA components. It cannot enable RTX 20/30 MFG by itself.
 
 한국어 설치 안내: [INSTALL-KO.md](INSTALL-KO.md) (전체 설치 절차 · ASI 로더 · Streamline 페처 포함).
 

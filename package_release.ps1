@@ -111,6 +111,7 @@ $files['docs/RELEASE-v0.8.8.md'] = Join-Path $root 'docs/RELEASE-v0.8.8.md'
 # H10 (owner decision, followups plan T4): the r3 Korean release note ships inside the zip.
 # T3 load-order doc ships byte-equal inside the ZIP (T5).
 $files['docs/RELEASE-NOTES-r3-KO.md'] = Join-Path $root 'docs/RELEASE-NOTES-r3-KO.md'
+$files['docs/RELEASE-v11.2-rc1.md'] = Join-Path $root 'docs/RELEASE-v11.2-rc1.md'
 $files['docs/XEFG-NR-RESHADE-LOAD-ORDER.md'] = Join-Path $root 'docs/XEFG-NR-RESHADE-LOAD-ORDER.md'
 foreach ($name in @('OptiScaler.ini', 'setup_windows.bat', 'setup_linux.sh', 'Streamline_fetcher_windows.bat', 'Install_AsiLoader_windows.bat', 'README.md', 'INSTALL-KO.md', 'INSTALL-DLSSNR.md', 'LICENSE',
                     'Features.md', 'Config.md', 'Spoofing.md',
