@@ -375,6 +375,32 @@ These can be changed from the in-game menu with real-time results.
 
 ![root certificate](images/cs.png)
 
+### XeFG Multi-Frame Generation (Dx12)
+
+`[XeFG]` holds the native multi-frame generation unlock. It patches the mapped `libxess_fg.dll` image in memory, never the file on disk, and only after the provider's own bytes pass the patch engine's per-byte checks.
+
+```ini
+[XeFG]
+; Native XeFG MFG unlock
+; Fork-consistent default stays OFF - shipped packages refuse a true default
+; true or false - Default (auto) is false
+UnlockMFG=auto
+
+; Caps how many interpolated frames XeFG may emit (6X ceiling)
+; 1..31 - Default (auto) is 5
+MaxInterpolatedFrames=auto
+
+; Extra frame pacing work for unlocked XeFG modes
+; true or false - Default (auto) is true
+ExtraPacing=auto
+```
+
+* `UnlockMFG` turns the unlock on. It's read once when the provider loads, so save and restart.
+* `MaxInterpolatedFrames` is the ceiling reported to the provider and shown in the menu. The multiplier is this value plus one, so 5 means 6X. Values outside 1..31 fall back to the default, and 1 applies no patch at all.
+* `ExtraPacing` paces each generated frame of a burst above 2X through the provider's own scheduler. It only runs when the unlock is applied, and it also needs a restart.
+
+Both have in-game controls under frame generation settings: the multiplier combo (2X, 3X, 4X, then `Custom...`) and the Extra Pacing checkbox. Above 4X the menu warns that VSync or a frame-rate cap is needed. More detail in [the MFG unlock notes](docs/README-XeFG-MFG-Unlock.md) and [the pacing notes](docs/README-XeFG-Pacing.md).
+
 ### Logging
 ```ini
 [Log]

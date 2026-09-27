@@ -1,54 +1,61 @@
+> **v0.8.8 prerelease:** [optional lighting and colour reconstruction](docs/RELEASE-v0.8.8.md).
+
 <div align="center">
-  <img src="images/susemi-title.svg" alt="OptiScaler Susemi Edition" width="800" />
-  <br />
-  <sub>Personal fork — Korean UI · MFG unlock · 20/30-series FG bundle</sub>
+
+  ![Logo](https://github.com/user-attachments/assets/c7dad5da-0b29-4710-8a57-b58e4e407abd)
+
 </div>
+<hr />
 <br />
 <div align="center">
+  <a href="https://github.com/sponsors/cdozdil?frequency=one-time"><img src="images/gh-sponsor-red.png" /></a>
+  <a href="https://buymeacoffee.com/nitec"><img src="images/bmac.png" /></a>
+</div>
+<br />
 
-# OptiScaler Susemi Edition
+## Table of Contents
 
-Korean UI + MFG unlock + 20/30-series FG bundle. Grab the latest below.
+**1.** [**About**](#about)  
+**2.** [**How it works?**](#how-it-works)  
+**3.** [**Supported APIs and Upscalers**](#which-apis-and-upscalers-are-supported)  
+**4.** [**Installation**](#installation)  
+**5.** [**Known Issues**](#known-issues)  
+**6.** [**Compilation and Credits**](#compilation)  
+**7.** [**Wiki**](https://github.com/optiscaler/OptiScaler/wiki)
 
-[![Latest release](https://img.shields.io/badge/Download-latest-green?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)
-[![Korean build](https://img.shields.io/badge/Download-KO-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest/download/OptiScaler-current-ko.zip)
-[![English build](https://img.shields.io/badge/Download-EN-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest/download/OptiScaler-current-en.zip)
-[![Total downloads](https://img.shields.io/github/downloads/grim-susemi/OptiScaler-Susemi/total?style=for-the-badge&logo=github&logoColor=white&label=Total%20downloads)](https://github.com/grim-susemi/OptiScaler-Susemi/releases)
-
+<br />
+<div align="center">
+  <a href="https://discord.gg/wEyd9w4hG5"><img src="https://img.shields.io/badge/OptiScaler-blue?style=for-the-badge&logo=discord&logoColor=white&logoSize=auto&color=5865F2" alt="Discord invite"></a>
+  <a href="https://github.com/optiscaler/OptiScaler/releases/latest"><img src="https://img.shields.io/badge/Download-Stable-green?style=for-the-badge&logo=github&logoSize=auto" alt="Stable release"></a>
+  <a href="https://github.com/optiscaler/OptiScaler/releases/tag/nightly"><img src="https://img.shields.io/badge/Download-Nightly-purple?style=for-the-badge&logo=github&logoSize=auto" alt="Nightly release"></a>
+  <a href="https://github.com/optiscaler/OptiScaler/wiki"><img src="https://img.shields.io/badge/Documentation-blue?style=for-the-badge&logo=gitbook&logoColor=white&logoSize=auto" alt="Wiki"></a>
+</div>
+<div align="center">
+  <a href="https://github.com/optiscaler/OptiScaler/releases"><img src="https://img.shields.io/github/downloads/optiscaler/optiscaler/total?style=for-the-badge&logo=gitextensions&logoSize=auto&label=Total" alt="Total DL"></a>
+  <a href="https://github.com/optiscaler/OptiScaler/releases/latest"><img src="https://img.shields.io/github/downloads/optiscaler/optiscaler/latest/total?style=for-the-badge&logo=gitextensions&logoSize=auto&label=Stable&color=green&logoColor=white" alt="Stable DL"></a>
+  <a href="https://github.com/optiscaler/OptiScaler/releases/tag/nightly"><img src="https://img.shields.io/github/downloads/optiscaler/OptiScaler/nightly/total?style=for-the-badge&logo=gitextensions&logoColor=white&logoSize=auto&label=Nightly&color=purple" alt="Nightly DL"></a>
+  <a href="https://github.com/optiscaler/OptiScaler/stargazers"><img src="https://img.shields.io/github/stars/optiscaler/optiscaler?style=for-the-badge&logo=githubsponsors&logoColor=white&label=S.T.A.R.S." alt="Stars"></a>
 </div>
 
-> [!NOTE]
-> Personal fork. Upstream is [optiscaler/OptiScaler](https://github.com/optiscaler/OptiScaler), base is [y4my4my4m/OptiScaler_DLSSNR_Multipass_MFG](https://github.com/y4my4my4m/OptiScaler_DLSSNR_Multipass_MFG). The original docs are folded below, untouched.
 
-## <a id="susemi-diff"></a>What's changed in this fork
+## Neural Rendering on this branch
 
-- **Korean UI** — overlay + tooltips in Korean, per-key **Unbind** button
-- **MFG unlock** — frame-generation ratio unlock for 40-series cards. Fail-closed + active indicator
-- **NR 200% restored** — neural rendering 200% model + D3D12 inspection hold
-- **20/30-series FG bundle** — DLSS / Streamline / FG files bundled in the zip, extract and go
-- **English build included** — same content as a separate EN zip
+The [built-in RTX 40 MFG unlock](docs/RTX40-MFG.md) is an optional build feature, excluded by default and separate from the upstream NR proposal.
 
-## <a id="susemi-download"></a>Download
+Optional [RTX 20/30 (SM75/SM86) MFG unlock](INSTALL-DLSSNR.md): the sdli1995 payload for Turing and Ampere cards ships inside this build. RTX 20/30 MFG 언락 안내는 [INSTALL-KO.md](INSTALL-KO.md)의 같은 절을 보세요.
 
-- Recommended: [latest release page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) — always points at the newest
-- `OptiScaler-current-ko.zip` (Korean) / `OptiScaler-current-en.zip` (English) — grab one (same file names every release)
+한국어 설치 안내: [INSTALL-KO.md](INSTALL-KO.md) (전체 설치 절차 · ASI 로더 · Streamline 페처 포함).
 
-## <a id="susemi-install"></a>Install (3 steps)
+Experimental NR adds pre/post-upscale and finished-picture processing, multipass tuning,
+model resolution, HDR/exposure controls and separate edit upscaling. It defaults off and
+uses a separately supplied `nvngx_dlssnr.dll` through the NVIDIA driver; no NR helper DLL.
 
-1. Extract the zip **next to the game exe**
-2. Check `OptiScaler.ini` — e.g. `[DLSSG] AdaMfgUnlock`, follow the comments for your card
-3. Rename `OptiScaler.dll` to **`dxgi.dll`** (Vulkan-only games: whichever of `winmm.dll` / `version.dll` the game loads)
+Below 100% model resolution, two optional enlargement modes join the existing ones: **Lighting + colour** (`Transfer=3`, lighting gain and colour changes resized separately on DX12 and native Vulkan) and **Lighting + colour + DLSS** (`Transfer=4`, the same fields enlarged by private DLSS SR, post-upscale DX12 processing only). The default stays Matched residual (`Transfer=1`). Both arrive with the [v0.8.8 upstream change](docs/RELEASE-v0.8.8.md).
 
-Full order follows the bundled guide [`dist/README.md`](dist/README.md).
-
-## <a id="susemi-notes"></a>Notes
-
-> [!CAUTION]
-> - **Do not use with online games** — anti-cheat / ban risk (same as upstream)
-> - **`version.dll` in the game folder is NOT a bundled file** — it's `OptiScaler.dll` renamed
-
-<details>
-<summary><b>Original OptiScaler docs (click to expand)</b> — compatibility lists and Wiki are upstream's</summary>
+See [installation](INSTALL-DLSSNR.md), [controls](docs/NR-PIPELINE-UI.md),
+[game tests and limits](docs/NR-UPSTREAM-REVIEW.md), [implementation](OptiScaler/dlssnr/README.md)
+and [credits](docs/CREDITS.md). Official download links refer to upstream OptiScaler;
+these experimental features are proposed separately.
 
 ## About
 
@@ -204,6 +211,3 @@ This project uses [FreeType](https://gitlab.freedesktop.org/freetype/freetype) l
   </tr>
  </tbody>
 </table>
-
-</details>
-

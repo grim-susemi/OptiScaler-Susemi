@@ -66,6 +66,15 @@ NvAPI_Status __stdcall NvApiHooks::hkNvAPI_DRS_GetSetting(NvDRSSessionHandle hSe
     auto result = o_NvAPI_DRS_GetSetting(hSession, hProfile, settingId, pSetting);
     if (pSetting && result == NVAPI_OK)
     {
+        constexpr NvU32 streamlineOverrideId = 0x10E41E06;
+        if (settingId == streamlineOverrideId && State::Instance().gameName == "KCD2" &&
+            State::Instance().activeFgOutput == FGOutput::DLSSG)
+        {
+            // Keep the tested local Streamline stack. This changes the query
+            // result for this process only, not the saved NVIDIA driver profile.
+            pSetting->u32CurrentValue = 0;
+            LOG_INFO("KCD2: use installed Streamline instead of OTA override");
+        }
 #ifdef LOG_ALL_DRS_GET_CALLS
         LOG_TRACE("settingId: {:X}, settingLocation: {}, isCurrentPredefined: {}", settingId,
                   magic_enum::enum_name(pSetting->settingLocation), pSetting->isCurrentPredefined,
@@ -203,25 +212,6 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
     {
         LOG_INFO("FlipMetering is disabled!");
         return nullptr;
-    }
-
-    // Withhold the entry points Streamline's multi-frame pacer is built on.
-    //
-    // RSYNC drives the spacing of generated frames through NvAPI_D3D_SetReflexSync. Where that entry
-    // point exists but the call fails -- dxvk-nvapi resolves it and returns an error -- Streamline
-    // retries every frame and reports setDynamicMFGParams failed with status 1, and the frames it
-    // does generate are presented unpaced. Refusing the interface leaves it on the pacing it uses
-    // when Reflex is absent, which is worse in principle and works in practice.
-    if (Config::Instance()->DisableReflexSync.value_or_default())
-    {
-        // getId answers 0 for a name the interface table does not carry, and no interface has id 0.
-        const auto reflexSync = GET_ID(NvAPI_D3D_SetReflexSync);
-
-        if (reflexSync != 0 && InterfaceId == reflexSync)
-        {
-            LOG_INFO("ReflexSync is disabled!");
-            return nullptr;
-        }
     }
 
     if (InterfaceId == GET_ID(NvAPI_D3D_SetSleepMode) || InterfaceId == GET_ID(NvAPI_D3D_Sleep) ||

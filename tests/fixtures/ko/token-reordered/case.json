@@ -1,0 +1,5 @@
+{
+ "name": "token-reordered",
+ "expect_code": "token-reordered",
+ "expect_key": "Enable %s and %d"
+}

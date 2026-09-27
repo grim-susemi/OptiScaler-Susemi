@@ -154,7 +154,6 @@ class MenuCommon
 
     // Labels for the Neural Rendering comparison views. Drawn every frame, into the frame plane,
     // so a screenshot keeps them and the wipe reveals and hides them like the images.
-    static void RenderNrCompareTags();
     static void RenderMainMenuWindow(RenderMenuContext& ctx);
 
     // RenderMainMenuWindow section helpers. These keep the main window flow readable
@@ -173,6 +172,7 @@ class MenuCommon
     static void RenderQuirksSettings(RenderMenuContext& ctx);
     static void RenderAdvancedSettings(RenderMenuContext& ctx);
     static void RenderLoggingSettings(RenderMenuContext& ctx);
+    static void RenderProfilesSettings(RenderMenuContext& ctx);
     static void RenderThemeSettings(RenderMenuContext& ctx);
     static void RenderFpsOverlaySettings(RenderMenuContext& ctx);
     static void RenderUpscalerInputsSettings(RenderMenuContext& ctx);
@@ -198,4 +198,5 @@ class MenuCommon
     static void Shutdown();
     static void HideMenu();
     static void Present();
+    static void ApplyThemeStyle();
 };

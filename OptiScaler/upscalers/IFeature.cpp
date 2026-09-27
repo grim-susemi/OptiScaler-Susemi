@@ -8,20 +8,6 @@ void IFeature::SetHandle(unsigned int InHandleId)
     LOG_INFO("Handle: {0}", _handle->Id);
 }
 
-// Neural Rendering between the halves of the upscaler: the upscaler writes at render resolution and
-// the enlargement to display resolution becomes a later stage, with the model between the two. For ray
-// reconstruction that makes the feature a denoiser and nothing else, which is the point -- the frame
-// handed to the model is clean, temporally settled, and a ninth of the pixels at Ultra Performance.
-//
-// Only where there is something to split. At render == display the upscaler is already 1:1 and the
-// model would run on the frame it runs on today, at the cost it costs today.
-bool IFeature::DualFeatureSplit() const
-{
-    return !_isEnlargementStage && _renderWidth > 0 && _renderWidth < _displayWidth &&
-           Config::Instance()->DlssNrDualFeature.value_or_default() &&
-           Config::Instance()->DlssNrEnabled.value_or_default();
-}
-
 bool IFeature::SetInitParameters(NVSDK_NGX_Parameter* InParameters)
 {
     unsigned int width = 0;
@@ -165,10 +151,6 @@ bool IFeature::SetInitParameters(NVSDK_NGX_Parameter* InParameters)
 
         _perfQualityValue = (NVSDK_NGX_PerfQuality_Value) pqValue;
 
-        if (DualFeatureSplit())
-            LOG_INFO("DLSS-NR dual feature: upscaler targets {}x{}, enlargement to {}x{} runs after the model",
-                     _renderWidth, _renderHeight, _displayWidth, _displayHeight);
-
         LOG_INFO("Render Resolution: {0}x{1}, Display Resolution {2}x{3}, Quality: {4}", _renderWidth, _renderHeight,
                  _displayWidth, _displayHeight, pqValue);
 
@@ -281,7 +263,7 @@ float IFeature::GetSharpness(const NVSDK_NGX_Parameter* InParameters)
     return sharpness;
 }
 
-void IFeature::TickFrozenCheck()
+void IFeature::TickFrozenCheck(uint32_t presentPerEval)
 {
     static long updatesWithoutFramecountChange = 0;
 
@@ -296,12 +278,7 @@ void IFeature::TickFrozenCheck()
 
         lastFrameCount = _frameCount;
 
-        // Ticked once per present, but _frameCount only advances on an evaluate. Frame generation
-        // presents its generated frames between evaluates, so the count reaches the multiplier every
-        // real frame with nothing wrong. Scale the threshold by it.
-        const auto presentsPerEvaluate = std::max(1, State::Instance().dlssgDetectedInterpolationCount + 1);
-
-        _featureFrozen = updatesWithoutFramecountChange > 10L * presentsPerEvaluate;
+        _featureFrozen = updatesWithoutFramecountChange > (10 * presentPerEval);
     }
 }
 

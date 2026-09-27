@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DxgiFactory_Hooks.h"
+#include "DxgiSwapchainSizing.h"
 
 #include "D3D11_Hooks.h"
 #include "D3D12_Hooks.h"
@@ -24,46 +25,212 @@
 #include <magic_enum.hpp>
 #endif
 
-static bool PrepareDx12InteropDesc(DXGI_SWAP_CHAIN_DESC& desc)
+static bool IsTearingSupported(IDXGIFactory* factory)
 {
+    if (factory == nullptr)
+        return false;
+
+    IDXGIFactory5* factory5 = nullptr;
+
+    if (FAILED(factory->QueryInterface(IID_PPV_ARGS(&factory5))))
+        return false;
+
+    BOOL supported = FALSE;
+
+    const HRESULT hr = factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &supported, sizeof(supported));
+
+    factory5->Release();
+
+    return SUCCEEDED(hr) && supported == TRUE;
+}
+
+static bool PrepareDx12FlipFormat(DXGI_FORMAT& format)
+{
+    switch (format)
+    {
+    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+        LOG_WARN("Dx11wDx12 converting R8G8B8A8_UNORM_SRGB to "
+                 "R8G8B8A8_UNORM for DX12 flip swapchain");
+        format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        return true;
+
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+        LOG_WARN("Dx11wDx12 converting B8G8R8A8_UNORM_SRGB to "
+                 "B8G8R8A8_UNORM for DX12 flip swapchain");
+        format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        return true;
+
+    case DXGI_FORMAT_R16G16B16A16_FLOAT:
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_R8G8B8A8_UNORM:
+    case DXGI_FORMAT_R10G10B10A2_UNORM:
+        return true;
+
+    default:
+        LOG_ERROR("Unsupported texture format for DX12 flip swapchain: {}", (UINT) format);
+        return false;
+    }
+}
+
+static bool PrepareDx12InteropDesc(DXGI_SWAP_CHAIN_DESC& desc, bool tearingSupported)
+{
+    // D3D12 swapchain backbuffers cannot be multisampled.
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains!");
+        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains! SampleCount: {}", desc.SampleDesc.Count);
         return false;
     }
 
+    // Flip-model swapchains support a limited set of formats.
+    if (!PrepareDx12FlipFormat(desc.BufferDesc.Format))
+    {
+        LOG_WARN("Dx11wDx12 interop unsupported flip-model format: {}", (UINT) desc.BufferDesc.Format);
+        return false;
+    }
+
+    // Flip-model requires 2-16 buffers.
     if (desc.BufferCount < 2)
         desc.BufferCount = 2;
 
-    if (desc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD)
+    if (desc.BufferCount > 16)
+    {
+        LOG_WARN("Dx11wDx12 interop invalid BufferCount: {}", desc.BufferCount);
+        return false;
+    }
+
+    // D3D12 supports flip-model swap effects only.
+    switch (desc.SwapEffect)
+    {
+    case DXGI_SWAP_EFFECT_DISCARD:
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    else if (desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL)
+        break;
+
+    case DXGI_SWAP_EFFECT_SEQUENTIAL:
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        break;
+
+    case DXGI_SWAP_EFFECT_FLIP_DISCARD:
+    case DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL:
+        break;
+
+    default:
+        LOG_WARN("Dx11wDx12 interop unsupported SwapEffect: {}", (UINT) desc.SwapEffect);
+        return false;
+    }
 
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
-    desc.Windowed = TRUE;
+
+    // D3D12 swapchain backbuffers cannot expose UAV usage.
+    if (desc.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS)
+    {
+        LOG_DEBUG("Dx11wDx12 removing DXGI_USAGE_UNORDERED_ACCESS from DX12 swapchain");
+        desc.BufferUsage &= ~DXGI_USAGE_UNORDERED_ACCESS;
+    }
+
+    // GDI-compatible swapchains are not applicable to the D3D12 interop path.
+    if (desc.Flags & DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE)
+    {
+        LOG_DEBUG("Dx11wDx12 removing DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE");
+        desc.Flags &= ~DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE;
+    }
+
+    // Keep the game's tearing intent when the system supports it.
+    if (!tearingSupported && (desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING))
+    {
+        LOG_DEBUG("Dx11wDx12 removing unsupported DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING");
+        desc.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    }
+
+    LOG_DEBUG("Dx11wDx12 DX12 desc: {}x{}, Format: {}, Count: {}, "
+              "Sample: {}/{}, Usage: {:X}, SwapEffect: {}, Flags: {:X}, "
+              "Windowed: {}, Refresh: {}/{}, Scaling: {}, Scanline: {}",
+              desc.BufferDesc.Width, desc.BufferDesc.Height, (UINT) desc.BufferDesc.Format, desc.BufferCount,
+              desc.SampleDesc.Count, desc.SampleDesc.Quality, desc.BufferUsage, (UINT) desc.SwapEffect, desc.Flags,
+              desc.Windowed, desc.BufferDesc.RefreshRate.Numerator, desc.BufferDesc.RefreshRate.Denominator,
+              (UINT) desc.BufferDesc.Scaling, (UINT) desc.BufferDesc.ScanlineOrdering);
+
     return true;
 }
 
-static bool PrepareDx12InteropDesc1(DXGI_SWAP_CHAIN_DESC1& desc)
+static bool PrepareDx12InteropDesc1(DXGI_SWAP_CHAIN_DESC1& desc, bool tearingSupported)
 {
+    // D3D12 swapchain backbuffers cannot be multisampled.
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_ERROR("Dx11wDx12 interop does not support MSAA swapchains!");
+        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains! SampleCount: {}", desc.SampleDesc.Count);
+        return false;
+    }
+
+    if (!PrepareDx12FlipFormat(desc.Format))
+    {
+        LOG_WARN("Dx11wDx12 interop unsupported flip-model format: {}", (UINT) desc.Format);
         return false;
     }
 
     if (desc.BufferCount < 2)
         desc.BufferCount = 2;
 
-    if (desc.SwapEffect == DXGI_SWAP_EFFECT_DISCARD)
+    if (desc.BufferCount > 16)
+    {
+        LOG_WARN("Dx11wDx12 interop invalid BufferCount: {}", desc.BufferCount);
+        return false;
+    }
+
+    // Current interop wrapper does not explicitly handle stereo swapchains.
+    if (desc.Stereo)
+    {
+        LOG_WARN("Dx11wDx12 interop does not support stereo swapchains!");
+        return false;
+    }
+
+    switch (desc.SwapEffect)
+    {
+    case DXGI_SWAP_EFFECT_DISCARD:
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    else if (desc.SwapEffect == DXGI_SWAP_EFFECT_SEQUENTIAL)
+        break;
+
+    case DXGI_SWAP_EFFECT_SEQUENTIAL:
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
+        break;
+
+    case DXGI_SWAP_EFFECT_FLIP_DISCARD:
+    case DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL:
+        break;
+
+    default:
+        LOG_WARN("Dx11wDx12 interop unsupported SwapEffect: {}", (UINT) desc.SwapEffect);
+        return false;
+    }
 
     desc.SampleDesc.Count = 1;
     desc.SampleDesc.Quality = 0;
+
+    if (desc.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS)
+    {
+        LOG_DEBUG("Dx11wDx12 removing DXGI_USAGE_UNORDERED_ACCESS from DX12 swapchain");
+        desc.BufferUsage &= ~DXGI_USAGE_UNORDERED_ACCESS;
+    }
+
+    if (desc.Flags & DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE)
+    {
+        LOG_DEBUG("Dx11wDx12 removing DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE");
+        desc.Flags &= ~DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE;
+    }
+
+    if (!tearingSupported && (desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING))
+    {
+        LOG_DEBUG("Dx11wDx12 removing unsupported DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING");
+        desc.Flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    }
+
+    LOG_DEBUG("Dx11wDx12 DX12 desc1: {}x{}, Format: {}, Count: {}, "
+              "Sample: {}/{}, Usage: {:X}, SwapEffect: {}, Flags: {:X}, "
+              "Scaling: {}, AlphaMode: {}, Stereo: {}",
+              desc.Width, desc.Height, (UINT) desc.Format, desc.BufferCount, desc.SampleDesc.Count,
+              desc.SampleDesc.Quality, desc.BufferUsage, (UINT) desc.SwapEffect, desc.Flags, (UINT) desc.Scaling,
+              (UINT) desc.AlphaMode, desc.Stereo);
+
     return true;
 }
 
@@ -116,6 +283,7 @@ void DxgiFactoryHooks::HookToFactory(IDXGIFactory* pFactory)
     IDXGIFactory2* factory2 = nullptr;
     if (pFactory->QueryInterface(IID_PPV_ARGS(&factory2)) == S_OK)
     {
+        void** factory2VTable = *reinterpret_cast<void***>(factory2);
         factory2->Release();
 
         if (o_CreateSwapChainForHwnd == nullptr)
@@ -132,6 +300,13 @@ void DxgiFactoryHooks::HookToFactory(IDXGIFactory* pFactory)
 
             if (o_CreateSwapChainForCoreWindow != nullptr)
                 DetourAttach(&(PVOID&) o_CreateSwapChainForCoreWindow, DxgiFactoryHooks::CreateSwapChainForCoreWindow);
+        }
+
+        if (o_CreateSwapChainForComposition == nullptr)
+        {
+            o_CreateSwapChainForComposition = (PFN_CreateSwapChainForComposition) factory2VTable[24];
+            if (o_CreateSwapChainForComposition != nullptr)
+                DetourAttach(&(PVOID&) o_CreateSwapChainForComposition, DxgiFactoryHooks::CreateSwapChainForComposition);
         }
     }
 
@@ -172,6 +347,7 @@ void DxgiFactoryHooks::HookToFactory(IDXGIFactory* pFactory)
         o_EnumAdapters1 = nullptr;
         o_CreateSwapChainForHwnd = nullptr;
         o_CreateSwapChainForCoreWindow = nullptr;
+        o_CreateSwapChainForComposition = nullptr;
         o_EnumAdapterByLuid = nullptr;
         o_EnumAdapterByGpuPreference = nullptr;
     }
@@ -261,9 +437,14 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
         return res;
     }
 
-    if (pDesc->BufferDesc.Height < 100 || pDesc->BufferDesc.Width < 100)
+    DXGI_SWAP_CHAIN_DESC localDesc = *pDesc;
+    const bool sizeToWindow = ResolveWindowSizedSwapchain(localDesc);
+
+    if (localDesc.BufferDesc.Height < 100 || localDesc.BufferDesc.Width < 100)
     {
-        LOG_WARN("Overlay call!");
+        LOG_WARN("Overlay call! Width: {}, Height: {}, Format: {}, Count: {}, Hwnd: {:X}, Windowed: {}",
+                 pDesc->BufferDesc.Width, pDesc->BufferDesc.Height, (UINT) pDesc->BufferDesc.Format,
+                 pDesc->BufferCount, (SIZE_T) pDesc->OutputWindow, pDesc->Windowed);
 
         ScopedSkipDxgiLoadChecks skipDxgiLoadChecks {};
         ScopedSkipParentWrapping skipParentWrapping {};
@@ -272,8 +453,9 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
         return res;
     }
 
-    DXGI_SWAP_CHAIN_DESC localDesc {};
-    memcpy(&localDesc, pDesc, sizeof(DXGI_SWAP_CHAIN_DESC));
+    if (sizeToWindow)
+        LOG_INFO("CreateSwapChain: 0x0 size-to-window descriptor, Hwnd: {:X}, Count: {}, wrapping normally",
+                 (SIZE_T) pDesc->OutputWindow, pDesc->BufferCount);
 
     LOG_DEBUG("Width: {}, Height: {}, Format: {}, Count: {}, Flags: {:X}, Hwnd: {:X}, Windowed: {}, SkipWrapping: {}",
               localDesc.BufferDesc.Width, localDesc.BufferDesc.Height, (UINT) localDesc.BufferDesc.Format,
@@ -426,8 +608,9 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
                     IDXGISwapChain* fgSwapChain = nullptr;
                     IDXGISwapChain4* fgSwapChain4 = nullptr;
                     bool fgSwapChainIsRealFG = false;
+                    const bool tearingSupported = IsTearingSupported(realFactory);
 
-                    if (SUCCEEDED(realScResult) && PrepareDx12InteropDesc(fgDesc))
+                    if (SUCCEEDED(realScResult) && PrepareDx12InteropDesc(fgDesc, tearingSupported))
                     {
                         {
                             ScopedSkipFGSCCreation skipFGSCCreation {};
@@ -452,8 +635,9 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
 
                     if (SUCCEEDED(realScResult) && realDx11SwapChain != nullptr && fgSwapChain4 != nullptr)
                     {
-                        State::Instance().currentSwapchainDesc = localDesc;
+                        State::Instance().currentSwapchainDesc = fgDesc;
                         State::Instance().currentRealSwapchain = realDx11SwapChain;
+                        State::Instance().currentFGSwapchain = fgSwapChain4;
                         State::Instance().currentD3D11Device = device;
                         State::Instance().currentD3D12Device = WithDx12::GetD3D12Device();
                         State::Instance().currentCommandQueue = WithDx12::GetD3D12CommandQueue();
@@ -525,6 +709,19 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
 
         if (result == S_OK)
         {
+            if (sizeToWindow)
+            {
+                // Keep the dimensions actually created by DXGI authoritative for menu sizing.
+                DXGI_SWAP_CHAIN_DESC resolvedDesc {};
+                if ((*ppSwapChain)->GetDesc(&resolvedDesc) == S_OK)
+                {
+                    LOG_INFO("CreateSwapChain: resolved size-to-window swapchain to {}x{}",
+                             resolvedDesc.BufferDesc.Width, resolvedDesc.BufferDesc.Height);
+                    localDesc.BufferDesc.Width = resolvedDesc.BufferDesc.Width;
+                    localDesc.BufferDesc.Height = resolvedDesc.BufferDesc.Height;
+                }
+            }
+
             State::Instance().currentSwapchainDesc = localDesc;
             State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
 
@@ -630,7 +827,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
 
     if (pDesc->Height < 100 || pDesc->Width < 100)
     {
-        LOG_WARN("Overlay call!");
+        LOG_WARN("Overlay call! Width: {}, Height: {}", pDesc->Width, pDesc->Height);
         HRESULT result;
 
         {
@@ -813,8 +1010,9 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
                     IDXGISwapChain1* fgSwapChain1 = nullptr;
                     IDXGISwapChain4* fgSwapChain4 = nullptr;
                     bool fgSwapChainIsRealFG = false;
+                    const bool tearingSupported = IsTearingSupported(realFactory);
 
-                    if (realScResult == S_OK && PrepareDx12InteropDesc1(fgDesc))
+                    if (realScResult == S_OK && PrepareDx12InteropDesc1(fgDesc, tearingSupported))
                     {
                         {
                             ScopedSkipFGSCCreation skipFGSCCreation {};
@@ -846,9 +1044,10 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
 
                     if (realScResult == S_OK && realDx11SwapChain1 != nullptr && fgSwapChain4 != nullptr)
                     {
-                        ((IDXGISwapChain*) realDx11SwapChain1)->GetDesc(&State::Instance().currentSwapchainDesc);
+                        ((IDXGISwapChain*) fgSwapChain4)->GetDesc(&State::Instance().currentSwapchainDesc);
                         State::Instance().currentSwapchainDesc.OutputWindow = hWnd;
                         State::Instance().currentRealSwapchain = realDx11SwapChain1;
+                        State::Instance().currentFGSwapchain = fgSwapChain4;
                         State::Instance().currentD3D11Device = device;
                         State::Instance().currentD3D12Device = WithDx12::GetD3D12Device();
                         State::Instance().currentCommandQueue = WithDx12::GetD3D12CommandQueue();
@@ -859,6 +1058,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
 
                         *ppSwapChain = (IDXGISwapChain1*) new Dx11wDx12SC(realDx11SwapChain1, fgSwapChain4, device,
                                                                           hWnd, localDesc.Flags);
+
                         State::Instance().currentSwapchain = *ppSwapChain;
                         State::Instance().currentWrappedSwapchain = *ppSwapChain;
 
@@ -1010,7 +1210,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForCoreWindow(IDXGIFactory2* realFactor
 
     if (pDesc->Height < 100 || pDesc->Width < 100)
     {
-        LOG_WARN("Overlay call!");
+        LOG_WARN("Overlay call! Width: {}, Height: {}", pDesc->Width, pDesc->Height);
 
         ScopedSkipDxgiLoadChecks skipDxgiLoadChecks {};
         return realFactory->CreateSwapChainForCoreWindow(pDevice, pWindow, pDesc, pRestrictToOutput, ppSwapChain);
@@ -1099,6 +1299,68 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForCoreWindow(IDXGIFactory2* realFactor
     return result;
 }
 
+
+HRESULT DxgiFactoryHooks::CreateSwapChainForComposition(IDXGIFactory2* realFactory, IUnknown* pDevice,
+                                                        const DXGI_SWAP_CHAIN_DESC1* pDesc,
+                                                        IDXGIOutput* pRestrictToOutput,
+                                                        IDXGISwapChain1** ppSwapChain)
+{
+    // Always call the trampoline, including pass-through/error cases. Calling the detoured virtual
+    // method here re-enters this hook. Keep the composition descriptor intact: notably, a desktop
+    // VSync override must not turn its FLIP_SEQUENTIAL swap effect into FLIP_DISCARD.
+    const bool passThrough = State::Instance().vulkanCreatingSC || _skipFGSwapChainCreation ||
+                             pDevice == nullptr || pDesc == nullptr || ppSwapChain == nullptr ||
+                             pDesc->Width < 100 || pDesc->Height < 100;
+    if (pDesc != nullptr && (pDesc->Width < 100 || pDesc->Height < 100))
+        LOG_WARN("Composition overlay/helper call! Width: {}, Height: {}", pDesc->Width, pDesc->Height);
+
+    HRESULT result;
+    {
+        ScopedSkipDxgiLoadChecks skipDxgiLoadChecks {};
+        ScopedSkipParentWrapping skipParentWrapping {};
+        result = o_CreateSwapChainForComposition(realFactory, pDevice, pDesc, pRestrictToOutput, ppSwapChain);
+    }
+    if (passThrough || FAILED(result) || *ppSwapChain == nullptr)
+        return result;
+
+    WrappedIDXGISwapChain4* existing = nullptr;
+    if ((*ppSwapChain)->QueryInterface(IID_PPV_ARGS(&existing)) == S_OK)
+    {
+        existing->Release();
+        return result;
+    }
+
+    DXGI_SWAP_CHAIN_DESC1 resolved {};
+    if (FAILED((*ppSwapChain)->GetDesc1(&resolved)))
+        return result; // Do not install a wrapper with unknown dimensions/flags.
+
+    // A composition chain has no native HWND. Use only an eligible window in this process, and
+    // defer overlay initialization to Present if no unambiguous window exists yet. Do not borrow
+    // another application's foreground window. HWND association remains a best-effort fallback.
+    const HWND window = FindCompositionWindow();
+    IDXGISwapChain1* const created = *ppSwapChain;
+    auto* wrapped = new WrappedIDXGISwapChain4(created, pDevice, window, resolved.Flags, false, true);
+    *ppSwapChain = wrapped;
+
+    // Preserve the returned COM/proxy chain: the wrapper owns its original reference. Unwrapping it
+    // here can leak an outer proxy and bypass another provider's presentation path.
+    State::Instance().currentRealSwapchain = created;
+    State::Instance().currentSwapchain = wrapped;
+    State::Instance().currentWrappedSwapchain = wrapped;
+    State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+    State::Instance().SCAllowTearing = (resolved.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) != 0;
+    State::Instance().SCLastFlags = resolved.Flags;
+    State::Instance().realExclusiveFullscreen = false;
+    State::Instance().screenWidth = (float) resolved.Width;
+    State::Instance().screenHeight = (float) resolved.Height;
+    DXGI_SWAP_CHAIN_DESC legacy {};
+    if (SUCCEEDED(created->GetDesc(&legacy)))
+        State::Instance().currentSwapchainDesc = legacy;
+    LOG_INFO("Wrapped composition swapchain {}x{}, window {:X}; plain presentation, no FG swapchain replacement",
+             resolved.Width, resolved.Height, (SIZE_T) window);
+    return result;
+}
+
 HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnknown* pDevice,
                                                DXGI_SWAP_CHAIN_DESC* pDesc, IDXGISwapChain** ppSwapChain)
 {
@@ -1131,9 +1393,12 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnkno
         return res;
     }
 
-    if (pDesc->BufferDesc.Height < 100 || pDesc->BufferDesc.Width < 100)
+    DXGI_SWAP_CHAIN_DESC localDesc = *pDesc;
+    ResolveWindowSizedSwapchain(localDesc);
+
+    if (localDesc.BufferDesc.Height < 100 || localDesc.BufferDesc.Width < 100)
     {
-        LOG_WARN("Overlay call!");
+        LOG_WARN("Overlay call! Width: {}, Height: {}", pDesc->BufferDesc.Width, pDesc->BufferDesc.Height);
 
         ScopedSkipDxgiLoadChecks skipDxgiLoadChecks {};
         ScopedSkipParentWrapping skipParentWrapping {};
@@ -1141,9 +1406,6 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChain(IDXGIFactory* realFactory, IUnkno
         auto res = o_DLSSGCreateSwapChain(realFactory, pDevice, pDesc, ppSwapChain);
         return res;
     }
-
-    DXGI_SWAP_CHAIN_DESC localDesc {};
-    memcpy(&localDesc, pDesc, sizeof(DXGI_SWAP_CHAIN_DESC));
 
     LOG_DEBUG("Width: {}, Height: {}, Format: {}, Count: {}, Flags: {:X}, Hwnd: {:X}, Windowed: {}, SkipWrapping: {}",
               localDesc.BufferDesc.Width, localDesc.BufferDesc.Height, (UINT) localDesc.BufferDesc.Format,
@@ -1427,7 +1689,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForHwnd(IDXGIFactory2* realFactory
 
     if (pDesc->Height < 100 || pDesc->Width < 100)
     {
-        LOG_WARN("Overlay call!");
+        LOG_WARN("Overlay call! Width: {}, Height: {}", pDesc->Width, pDesc->Height);
         HRESULT result;
 
         {
@@ -1722,7 +1984,7 @@ HRESULT DxgiFactoryHooks::DLSSGCreateSwapChainForCoreWindow(IDXGIFactory2* realF
 
     if (pDesc->Height < 100 || pDesc->Width < 100)
     {
-        LOG_WARN("Overlay call!");
+        LOG_WARN("Overlay call! Width: {}, Height: {}", pDesc->Width, pDesc->Height);
 
         ScopedSkipDxgiLoadChecks skipDxgiLoadChecks {};
         return realFactory->CreateSwapChainForCoreWindow(pDevice, pWindow, pDesc, pRestrictToOutput, ppSwapChain);

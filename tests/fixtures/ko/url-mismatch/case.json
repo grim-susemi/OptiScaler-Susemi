@@ -1,0 +1,5 @@
+{
+ "name": "url-mismatch",
+ "expect_code": "url-mismatch",
+ "expect_key": "Visit https://github.com/grim-susemi/OptiScaler-Susemi for the source"
+}

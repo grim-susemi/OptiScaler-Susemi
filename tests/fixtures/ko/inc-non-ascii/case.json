@@ -1,0 +1,5 @@
+{
+ "name": "inc-non-ascii",
+ "expect_code": "inc-non-ascii",
+ "expect_key": "ko_catalog.inc"
+}

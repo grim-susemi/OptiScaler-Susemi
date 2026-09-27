@@ -1,0 +1,14 @@
+{
+ "candidates": [
+  {
+   "msgid": "Override",
+   "classes": [
+    "Button"
+   ],
+   "sites": [
+    "fixture"
+   ],
+   "occurrences": 1
+  }
+ ]
+}

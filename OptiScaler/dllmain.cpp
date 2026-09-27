@@ -6,6 +6,7 @@
 #include "Logger.h"
 #include "resource.h"
 #include "DllNames.h"
+#include "BuildInfo.h"
 
 #include "proxies/Dxgi_Proxy.h"
 #include "proxies/Kernel32_Proxy.h"
@@ -947,17 +948,7 @@ static void CheckWorkingMode()
 
     // NVAPI
     // Doesn't seem to like GetModuleHandle for some reason, so call our load to make sure
-    //
-    // Also loaded when it is not present yet and an interface is meant to be withheld. Streamline
-    // resolves its nvapi entry points as it initialises, and a detour installed after that resolve
-    // is never consulted -- the module is hooked, the caller holds addresses from before the hook.
-    // Loading it here puts the detour in first. Only on Nvidia, and only when something asks for it,
-    // so no process gains nvapi that would not have had it.
-    const bool withholdingAnInterface = Config::Instance()->DisableReflexSync.value_or_default() ||
-                                        Config::Instance()->DisableFlipMetering.value_or_default();
-
-    if (GetDllNameWModule(&nvapiNamesW) != nullptr ||
-        (withholdingAnInterface && IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Nvidia))
+    if (GetDllNameWModule(&nvapiNamesW) != nullptr)
     {
         // This hooks nvapi as well when possible
         auto nvapi64 = LibraryLoadHooks::LoadNvApi();
@@ -1325,6 +1316,12 @@ static void printQuirks(flag_set<GameQuirk>& quirks)
 
     if (quirks & GameQuirk::CreateSLOnThe2ndDevice)
         stringQuirks.push_back("Create SL on the 2nd device");
+
+    if (quirks & GameQuirk::Kcd2DlssgHdr10)
+        stringQuirks.push_back("KCD2 native HDR10 for DLSSG");
+
+    if (quirks & GameQuirk::Kcd2NrBeforeFg)
+        stringQuirks.push_back("KCD2 finished-picture NR before DLSSG");
 
     state->detectedQuirks.append_range(stringQuirks);
     for (auto& stringQuirk : stringQuirks)
@@ -1740,6 +1737,9 @@ void CheckMemoryForProxies()
 
 DWORD WINAPI getGpuInfo(LPVOID hModuleVoid)
 {
+    // TODO: dxvk deadlocks when the game and identify gpu calls create at the same time
+    // Sleep(1000);
+
     auto primaryGpu = IdentifyGpu::getPrimaryGpu();
 
     // We don't yet know if the GPU supports FSR 4 so hook any AMD
@@ -1836,7 +1836,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
         PrepareLogger();
 
-        spdlog::warn("{0} loaded", VER_PRODUCT_NAME);
+        spdlog::warn("{0} loaded", BuildInfo::ProductName());
         spdlog::warn("---------------------------------");
         spdlog::warn("OptiScaler is freely downloadable from");
         spdlog::warn("GitHub : https://github.com/optiscaler/OptiScaler/releases");
@@ -2179,6 +2179,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
     case DLL_PROCESS_DETACH:
         State::Instance().isShuttingDown = true;
+        // ExitProcess has already stopped other threads. No DLL unloading, logging,
+        // thread joins or GPU cleanup is safe here; the OS reclaims process resources.
+        if (lpReserved != nullptr)
+            break;
 
         // Unhooking and cleaning stuff causing issues during shutdown.
         // Disabled for now to check if it cause any issues

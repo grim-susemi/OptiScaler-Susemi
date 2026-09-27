@@ -10,6 +10,7 @@
 #include <set>
 #include <deque>
 #include <mutex>
+#include <atomic>
 #include <sl_dlss_g.h>
 #include <vulkan/vulkan.h>
 #include <ankerl/unordered_dense.h>
@@ -86,12 +87,46 @@ enum class SwapchainInteropApi : uint32_t
     Dx11wDx12,
 };
 
-enum class ColorEncoding : uint32_t
+enum class ColorTransfer : uint32_t
 {
-    SDR,
-    ScRGB,
+    Unknown,
+    SRGB,
+    Linear,
     PQ,
     HLG
+};
+
+enum class ColorPrimaries : uint32_t
+{
+    Unknown,
+    Rec709,
+    Rec2020
+};
+
+enum class ColorRange : uint32_t
+{
+    Unknown,
+    Full,
+    Studio
+};
+
+enum class ColorModel : uint32_t
+{
+    Unknown,
+    RGB,
+    YCbCr
+};
+
+struct OutputColorSpace
+{
+    DXGI_COLOR_SPACE_TYPE dxgiColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+
+    ColorTransfer transfer = ColorTransfer::SRGB;
+    ColorPrimaries primaries = ColorPrimaries::Rec709;
+    ColorRange range = ColorRange::Full;
+    ColorModel model = ColorModel::RGB;
+
+    bool valid = false;
 };
 
 typedef struct CapturedHudlessInfo
@@ -106,8 +141,9 @@ class State
   public:
     static State& Instance()
     {
-        static State instance;
-        return instance;
+        // Hooks still read the shutdown flag during other DLLs' detach callbacks.
+        static auto* instance = new State;
+        return *instance;
     }
 
     std::string gameExe;
@@ -134,12 +170,8 @@ class State
     bool dlssgDebugView = false;
     bool dlssgInterpolatedOnly = false;
     uint64_t dlssgLastFrame = 0;
-
-    // Presents MenuOverlayVk must skip before it may submit again. Charged to 10 whenever DLSS-G is
-    // pushed active with the menu hidden, decremented once per present. A game that pushes DLSS-G
-    // options every frame therefore pins it non-zero and the Vulkan overlay draws nothing at all --
-    // FPS overlay and notifications included -- for as long as DLSS-G runs.
     uint32_t delayMenuRenderBy = 0;
+    bool menuOverlayIsVulkan = false;
 
     // FSR Common
     float lastFsrCameraNear = 0.0f;
@@ -281,9 +313,6 @@ class State
     bool vulkanCreatingSC = false;
     bool creatingD3DDevice = false;
     bool vulkanSkipHooks = false;
-    // MenuOverlayVk holds ImGui's renderer backend. Independent of swapchainApi, and the condition
-    // MenuOverlayDx::Present stands down on: ImGui has one renderer backend at a time.
-    bool menuOverlayIsVulkan = false;
     VkInstance VulkanInstance = nullptr;
 
     // Framegraph
@@ -319,13 +348,13 @@ class State
 
     // HDR
     std::vector<IUnknown*> scBuffers;
-    ColorEncoding swapchainEncoding = ColorEncoding::SDR;
+    OutputColorSpace outputColorSpace {};
     bool hdrOutputActive = false;
 
     std::optional<ApiUpscalerInput> setInputApiName;
     ApiUpscalerInput currentInputApiName;
 
-    bool isShuttingDown = false;
+    std::atomic_bool isShuttingDown { false };
     std::set<PVOID> modulesToFree;
 
     // menu warnings

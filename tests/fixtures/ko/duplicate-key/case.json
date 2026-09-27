@@ -1,0 +1,5 @@
+{
+ "name": "duplicate-key",
+ "expect_code": "duplicate-key",
+ "expect_key": "ko.json"
+}

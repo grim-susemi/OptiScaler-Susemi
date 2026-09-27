@@ -420,11 +420,6 @@ FodyWeavers.xsd
 
 !external/directx_agility_sdk/lib/D3D12Core.dll
 
-# Streamline 2.14 and DLSS 310.9 redistributables, packaged into the build under OptiScaler
-# and OptiScaler/streamline.
-!dist/streamline/*.dll
-!dist/nvngx/*.dll
-
 # Fortran module files
 *.mod
 *.smod
@@ -446,4 +441,13 @@ CyberFSR/imgui.ini
 /OptiScaler/misc/Telemetry.cpp
 /OptiScaler/misc/Telemetry.h
 release
-build_out
+
+# Local dependency/download caches.
+/.dependencies/
+/OptiScaler/streamline/
+
+.agents/
+.logs/
+
+# Local runtime experiments (not packaged)
+dlssg_for_sm86/

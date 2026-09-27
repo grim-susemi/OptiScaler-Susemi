@@ -1,0 +1,14 @@
+{
+ "candidates": [
+  {
+   "msgid": "Apply %s to %d textures",
+   "classes": [
+    "Button"
+   ],
+   "sites": [
+    "fixture"
+   ],
+   "occurrences": 1
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+{
+ "candidates": [
+  {
+   "msgid": "DLSS Settings",
+   "classes": [
+    "Button"
+   ],
+   "sites": [
+    "fixture"
+   ],
+   "occurrences": 1
+  }
+ ]
+}

@@ -1,0 +1,5 @@
+{
+ "name": "newline-mismatch",
+ "expect_code": "newline-mismatch",
+ "expect_key": "Line one\nLine two"
+}

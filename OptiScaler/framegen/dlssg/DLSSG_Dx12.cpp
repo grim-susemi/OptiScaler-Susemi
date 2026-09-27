@@ -1,14 +1,20 @@
 #include "pch.h"
 
 #include "DLSSG_Dx12.h"
+#include "Kcd2Hdr.h"
+#if defined(OPTISCALER_RTX40_MFG)
+#include "MfgUnlock.h"
+#endif
 
 #include <hudfix/Hudfix_Dx12.h>
+#include <hudfix/Hudfix_Dx11.h>
+
 #include <menu/menu_overlay_dx.h>
 #include <resource_tracking/ResTrack_dx12.h>
 
 #include <hooks/Reflex_Hooks.h>
-#include <hooks/DxgiFactory_Hooks.h>
 #include <hooks/Streamline_Hooks.h>
+#include <hooks/DxgiFactory_Hooks.h>
 
 #include <magic_enum.hpp>
 
@@ -32,6 +38,7 @@ HWND DLSSG_Dx12::Hwnd() { return _hwnd; }
 bool DLSSG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQueue, DXGI_SWAP_CHAIN_DESC* desc,
                                  IDXGISwapChain** swapChain, bool readyToRelease)
 {
+    Kcd2Hdr::ApplyQuirk();
     if (State::Instance().currentFGSwapchain != nullptr && _hwnd == desc->OutputWindow)
     {
         if (Config::Instance()->FGPreserveSwapChain.value_or_default())
@@ -102,6 +109,13 @@ bool DLSSG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
     StreamlineProxy::SetFeatureLoaded()(sl::kFeatureDLSS_G, true);
 
     desc->Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+    if (State::Instance().gameName == "KCD2")
+    {
+        // KCD2 waits on this handle. Declare application ownership so Streamline
+        // does not also consume it and stall its flip queue.
+        desc->Flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+        LOG_INFO("KCD2: requesting application-owned frame-latency waitable");
+    }
 
     auto result = S_FALSE;
 
@@ -116,11 +130,17 @@ bool DLSSG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
         return false;
     }
 
+#if defined(OPTISCALER_RTX40_MFG)
+    MfgUnlock::TryApply();
+#endif
     sl::DLSSGState dlssgState {};
     sl::DLSSGOptions dlssgOptions {};
     if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
     {
         _maxInterpolationCount = dlssgState.numFramesToGenerateMax;
+#if defined(OPTISCALER_RTX40_MFG)
+        _maxInterpolationCount = std::max(_maxInterpolationCount, static_cast<int>(MfgUnlock::UnlockedMax()));
+#endif
         LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
 
         _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;
@@ -137,6 +157,7 @@ bool DLSSG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
                                   DXGI_SWAP_CHAIN_DESC1* desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pFullscreenDesc,
                                   IDXGISwapChain1** swapChain, bool readyToRelease)
 {
+    Kcd2Hdr::ApplyQuirk();
     if (State::Instance().currentFGSwapchain != nullptr && _hwnd == hwnd)
     {
         if (Config::Instance()->FGPreserveSwapChain.value_or_default())
@@ -213,6 +234,11 @@ bool DLSSG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
         StreamlineProxy::SetFeatureLoaded()(sl::kFeatureDLSS_G, true);
 
         desc->Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        if (State::Instance().gameName == "KCD2")
+        {
+            desc->Flags |= DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+            LOG_INFO("KCD2: requesting application-owned frame-latency waitable");
+        }
         auto result = factory2->CreateSwapChainForHwnd(cmdQueue, hwnd, desc, pFullscreenDesc, nullptr, swapChain);
 
         factory2->Release();
@@ -225,11 +251,17 @@ bool DLSSG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmd
         }
     }
 
+#if defined(OPTISCALER_RTX40_MFG)
+    MfgUnlock::TryApply();
+#endif
     sl::DLSSGState dlssgState {};
     sl::DLSSGOptions dlssgOptions {};
     if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
     {
         _maxInterpolationCount = dlssgState.numFramesToGenerateMax;
+#if defined(OPTISCALER_RTX40_MFG)
+        _maxInterpolationCount = std::max(_maxInterpolationCount, static_cast<int>(MfgUnlock::UnlockedMax()));
+#endif
         LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
 
         _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;
@@ -362,10 +394,7 @@ bool DLSSG_Dx12::Dispatch()
         options.dynamicTargetFrameRate = Config::Instance()->FGDLSSGFramerateTargetDMFG.value_or_default();
     }
 
-    // StreamlineProxy holds the raw export, so this push bypasses hkslDLSSGSetOptions and its
-    // interlock. Apply it here too.
     StreamlineHooks::applyMenuDlssgInterlock(options, true);
-
     auto dlssgSetOptionsResult = StreamlineProxy::DLSSGSetOptions()(viewport, options);
 
     if (dlssgSetOptionsResult != sl::Result::eOk)
@@ -612,6 +641,7 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
 
         state.clearCapturedHudlesses = true;
         Hudfix_Dx12::ResetCounters();
+        Hudfix_Dx11::ResetCounters();
     }
 
     if (state.fgChanged)
@@ -621,6 +651,7 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
         state.fgChanged = false;
 
         Hudfix_Dx12::ResetCounters();
+        Hudfix_Dx11::ResetCounters();
 
         // Pause for 10 frames
         UpdateTarget();
@@ -796,7 +827,6 @@ bool DLSSG_Dx12::Present()
     {
         auto ui = GetResource(FG_ResourceType::UIColor, fIndex);
         if (ui && (ui->validity == FG_ResourceValidity::UntilPresent ||
-                   ui->validity == FG_ResourceValidity::JustTrackCmdlist ||
                    ui->validity == FG_ResourceValidity::UntilPresentFromDispatch))
         {
             LOG_DEBUG("UI[{}] resource: {:X}, copy: {}", fIndex, (size_t) ui->resource, (size_t) ui->copy);
@@ -832,7 +862,6 @@ bool DLSSG_Dx12::Present()
         {
             auto hudless = GetResource(FG_ResourceType::HudlessColor, fIndex);
             if (hudless && (hudless->validity == FG_ResourceValidity::UntilPresent ||
-                            hudless->validity == FG_ResourceValidity::JustTrackCmdlist ||
                             hudless->validity == FG_ResourceValidity::UntilPresentFromDispatch))
             {
                 LOG_DEBUG("Hudless[{}] resource: {:X}, copy: {}", fIndex, (size_t) hudless->resource,
@@ -1037,8 +1066,7 @@ bool DLSSG_Dx12::SetResource(Dx12Resource* inputResource)
         _noHudless[fIndex] = false;
 
     if ((type == FG_ResourceType::Depth || type == FG_ResourceType::Velocity) ||
-        (fResource->validity != FG_ResourceValidity::UntilPresent &&
-         fResource->validity != FG_ResourceValidity::JustTrackCmdlist))
+        fResource->validity != FG_ResourceValidity::UntilPresent)
     {
         fResource->validity = (fResource->validity != FG_ResourceValidity::ValidNow || willFlip)
                                   ? FG_ResourceValidity::UntilPresent

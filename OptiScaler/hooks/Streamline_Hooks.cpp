@@ -1,6 +1,15 @@
 #include <pch.h>
 
 #include "Streamline_Hooks.h"
+#if defined(OPTISCALER_RTX40_MFG)
+#include <framegen/dlssg/AmpereMfgLoader.h>
+#include <framegen/dlssg/MfgUnlock.h>
+#endif
+#include <dlssnr/DlssNr_StreamlinePicture.h>
+// nr-xefg R12: DlssNr::NativeProbeAdmission is the reviewed, behavioural-tested strict saturating latch
+// (tests/nr_native_probe_budget_smoke.cpp, 6 cases); the R12 Streamline pair diagnostics reuse it instead of
+// introducing a second, untested budget policy.
+#include <shaders/dlssnr/DlssNr_NativeProbe.h>
 
 #include <Util.h>
 #include <Config.h>
@@ -10,7 +19,6 @@
 #include <hooks/Reflex_Hooks.h>
 #include <menu/menu_overlay_base.h>
 #include <framegen/nvngx/Nvngx_FG.h>
-#include <framegen/dlssg/MfgUnlock.h>
 #include <proxies/KernelBase_Proxy.h>
 #include <imgui/ImGuiNotify.hpp>
 
@@ -18,6 +26,35 @@
 #include <sl1_reflex.h>
 #include <magic_enum.hpp>
 #include "detours/detours.h"
+#include "SlPairDetours.h"
+
+namespace
+{
+// nr-xefg R12 (W0 slInit + W1 slSetD3DDevice): ONE shared strict saturating latch for the two data-token sites
+// - at most NativeProbeAdmission::kBudget = 8 records for both. W2 owns a second latch of the same size, so the
+// three data tokens are bounded at 8 + 8 = 16 records per process whatever the game does. REVIEW R2-M3: the
+// lifecycle status records share a THIRD latch of the same size, so the whole revision is bounded at
+// 16 data + 8 status = 24 records per process. All three reuse the reviewed, tested production policy
+// (tests/nr_native_probe_budget_smoke.cpp).
+DlssNr::NativeProbeAdmission slInitAndDeviceAdmission;
+DlssNr::NativeProbeAdmission slPairStatusAdmission;
+
+// nr-xefg R12 (H1, R2-H1): which OPTIONAL pair detours really committed. Written only from SlPairDetours'
+// outcome and consumed only through SlPairDetours::RemoveOptionalPair, so a detach is never issued for an
+// export that was merely resolved (a non-null o_sl* pointer is NOT proof of an attached detour) and a failed
+// cleanup can leave this state - and the trampoline slots it belongs to - intact for a retry.
+SlPairDetours::PairState slPairState;
+
+// The real Detours entry points, bound once, so the installer a test drives is the installer production runs.
+const SlPairDetours::Api detoursApi {
+    [] { return DetourTransactionBegin(); },
+    [] { return DetourUpdateThread(GetCurrentThread()); },
+    [](void** trampoline, void* hook) { return DetourAttach((PVOID*) trampoline, hook); },
+    [](void** trampoline, void* hook) { return DetourDetach((PVOID*) trampoline, hook); },
+    [] { return DetourTransactionCommit(); },
+    [] { return DetourTransactionAbort(); },
+};
+} // namespace
 
 static bool IsSL1AndDLSSGActive()
 {
@@ -74,7 +111,7 @@ char* StreamlineHooks::trimStreamlineLog(const char* msg)
 
 void StreamlineHooks::streamlineLogCallback(sl::LogType type, const char* msg)
 {
-    if (msg == nullptr)
+    if (msg == nullptr || State::Instance().isShuttingDown)
         return;
 
     char* trimmed_msg = trimStreamlineLog(msg);
@@ -106,6 +143,39 @@ void StreamlineHooks::streamlineLogCallback(sl::LogType type, const char* msg)
 sl::Result StreamlineHooks::hkslInit(const sl::Preferences& pref, uint64_t sdkVersion)
 {
     LOG_FUNC();
+
+    // NR_XEFG_SL_INIT (nr-xefg R12 W0): the preferences the GAME handed to slInit, read before this hook
+    // rewrites the copy - so `flags` is the game's own request, NOT what SL finally receives. The two named
+    // bits only say how SL was asked to install proxies (eUseDXGIFactoryProxy 1<<5, eUseManualHooking 1<<2);
+    // a set bit is a request, not proof SL honoured it, and a clear bit is not proof that no proxy exists.
+    // Read-only: no SL API call, no allocation, no argument/return mutation. Budget: the shared W0/W1 latch.
+    static std::atomic<uint32_t> slInitSeq { 0 };
+    const uint32_t seq = slInitSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    if (slInitAndDeviceAdmission.Admit())
+    {
+        const uint64_t flags = (uint64_t) pref.flags;
+        LOG_DEBUG("NR_XEFG_SL_INIT seq={} probe={}/{} flags={:X} dxgi_factory_proxy={} manual_hooking={} "
+                  "log_level_in={}",
+                  seq, slInitAndDeviceAdmission.Admitted(), DlssNr::NativeProbeAdmission::kBudget, flags,
+                  (flags & (uint64_t) sl::PreferenceFlags::eUseDXGIFactoryProxy) != 0 ? 1u : 0u,
+                  (flags & (uint64_t) sl::PreferenceFlags::eUseManualHooking) != 0 ? 1u : 0u,
+                  (unsigned) pref.logLevel);
+    }
+
+#if defined(OPTISCALER_RTX40_MFG)
+    // Pre-slInit arming (RTX 20/30 SM75/SM86 unlock). Streamline 2.x decides "this platform does not support
+    // DLSS-G" inside slInit, so the payload and its companion INI have to be in place BEFORE the original is
+    // called (C2: docs/rtx2030-payload-contract.md "Arming order"). The call sits above every return in this
+    // function on purpose - the DLSSG branch further down returns early at the `return o_slInit(localPref,
+    // sdkVersion);` inside `if (State::Instance().activeFgInput == FGInput::DLSSG || ...)`, so an arming call
+    // placed after it would never run in the game-owned-FG modes this unlock is built for. Arm() is the single
+    // entry point: it reads the setting itself (off -> Disabled, no file work), latches once per process and
+    // reports named failures (PayloadMissing / IniWriteFailed / PayloadLoadFailed / PayloadStandby, C4/C5).
+    // No file I/O happens in DllMain: this is the game's own slInit call, and the GPU facts it needs come from
+    // the existing getGpuInfo worker's IdentifyGpu cache.
+    AmpereMfgLoader::Arm();
+#endif
 
     sl::Preferences localPref = pref;
 
@@ -311,8 +381,11 @@ static sl::Result dummy_slDLSSGGetState(const sl::ViewportHandle& viewport, sl::
                                         const sl::DLSSGOptions* options)
 {
     state.numFramesActuallyPresented = 1; // TODO: can do better
-    state.numFramesToGenerateMax = 1;
-    state.bIsVsyncSupportAvailable = sl::Boolean::eTrue;
+    if (state.structVersion >= 2)
+    {
+        state.numFramesToGenerateMax = 1;
+        state.bIsVsyncSupportAvailable = sl::Boolean::eTrue;
+    }
     state.estimatedVRAMUsageInBytes = 300 * 1024 * 1024;
 
     return sl::Result::eOk;
@@ -554,21 +627,77 @@ sl::Result StreamlineHooks::hkslAllocateResources(sl::CommandBuffer* cmdBuffer, 
 
 sl::Result StreamlineHooks::hkslGetNativeInterface(void* proxyInterface, void** baseInterface)
 {
-    LOG_FUNC();
+    // NR_XEFG_SL_GETNATIVE (nr-xefg R12 W2). Runs strictly AFTER the original, once, and only READS the
+    // caller's out parameter: `base` is taken from *baseInterface only when the original returned eOk and
+    // both the out parameter and its value are non-null. On a failed or unobserved call the base/base_iu
+    // fields still appear, as the null placeholder with base_state=absent / base_iu_state=not_called - i.e.
+    // UNOBSERVED values, never a measured null. The caller's reference is never released and *baseInterface
+    // is never written; arguments and the returned status pass through unchanged. proxy_iu/base_iu are
+    // canonical IUnknown identities from SlPairDetours::Canonicalize (own balanced temporary refs); only two
+    // identities that were BOTH acquired may be compared (equal = same COM object, unequal = different COM
+    // objects), and a pair observed for some OTHER object says nothing about the device mapping. LUID is
+    // deliberately absent - it identifies an adapter, never a COM object. No sl* API is called here (that
+    // would re-enter the API the header documents as NOT thread safe). Budget: own saturating latch, <= 8
+    // records per process; REPORT.md states the residual "which objects consume the 8" limitation.
     auto result = o_slGetNativeInterface(proxyInterface, baseInterface);
+
+    static std::atomic<uint32_t> getNativeSeq { 0 };
+    const uint32_t seq = getNativeSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    void* base = nullptr;
+    if (result == sl::Result::eOk && baseInterface != nullptr && *baseInterface != nullptr)
+        base = *baseInterface;
+
+    static DlssNr::NativeProbeAdmission getNativeAdmission;
+    if (getNativeAdmission.Admit())
+    {
+        // Scope-bound canonical identities (review R2-M2): each holds one own reference inside a ComPtr, so an
+        // unwind out of the log call releases it instead of leaking it.
+        const auto proxyIdentity = SlPairDetours::Canonicalize(proxyInterface);
+        const auto baseIdentity = SlPairDetours::Canonicalize(base);
+
+        LOG_DEBUG("NR_XEFG_SL_GETNATIVE seq={} probe={}/{} call=1 proxy={:p} proxy_iu_state={} proxy_iu={:p} "
+                  "status={:X} base_state={} base={:p} base_iu_state={} base_iu={:p}",
+                  seq, getNativeAdmission.Admitted(), DlssNr::NativeProbeAdmission::kBudget, proxyInterface,
+                  proxyIdentity.state, (void*) proxyIdentity.Get(), (unsigned) result,
+                  base != nullptr ? "present" : "absent", base, baseIdentity.state, (void*) baseIdentity.Get());
+    }
+
     return result;
 }
 
 sl::Result StreamlineHooks::hkslSetD3DDevice(void* d3dDevice)
 {
-    LOG_FUNC();
+    // NR_XEFG_SL_SETD3DDEVICE (nr-xefg R12 W1): the exact app-handed `handle` of the game's own call and its
+    // canonical IUnknown identity, taken BEFORE the original runs. Deliberately not called "native": nothing
+    // here proves the handle is a de-proxied device, an SL proxy, or the object the XeFG/NR side sees.
+    // handle_iu_state=not_called means the handle was null and no query ran; no synthetic HRESULT is emitted.
+    // No sl* API is called; the argument and the returned sl::Result pass through unchanged and the original
+    // is invoked exactly once. Budget: the shared W0/W1 latch - once exhausted no QueryInterface runs.
+    const bool admitted = slInitAndDeviceAdmission.Admit();
+    const uint32_t probe = slInitAndDeviceAdmission.Admitted();
+
+    static std::atomic<uint32_t> setD3DDeviceSeq { 0 };
+    const uint32_t seq = setD3DDeviceSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    SlPairDetours::CanonicalIdentity handleIdentity;
+    if (admitted)
+        handleIdentity = SlPairDetours::Canonicalize(d3dDevice);
+
     auto result = o_slSetD3DDevice(d3dDevice);
+
+    if (admitted)
+        LOG_DEBUG("NR_XEFG_SL_SETD3DDEVICE seq={} probe={}/{} call=1 handle={:p} handle_iu_state={} "
+                  "handle_iu={:p} status={:X}",
+                  seq, probe, DlssNr::NativeProbeAdmission::kBudget, (void*) d3dDevice, handleIdentity.state,
+                  (void*) handleIdentity.Get(), (unsigned) result);
+
     return result;
 }
 
 void StreamlineHooks::streamlineLogCallback_sl1(sl1::LogType type, const char* msg)
 {
-    if (msg == nullptr)
+    if (msg == nullptr || State::Instance().isShuttingDown)
         return;
 
     char* trimmed_msg = trimStreamlineLog(msg);
@@ -1108,6 +1237,11 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     newOptions.structVersion = newStructVer;
 
+#if defined(OPTISCALER_RTX40_MFG)
+    // What the game asked for, before any override. A struct too old to carry the field reads as 1 (2X).
+    const unsigned int requestedCount = newOptions.numFramesToGenerate;
+#endif
+
     auto& state = State::Instance();
 
     // Disable game's DLSSG when we are trying to create our own instance of DLSSG
@@ -1144,27 +1278,23 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     if (dlssgPotentiallyActive && state.streamlineVersion >= feature_version { 2, 7, 1 })
     {
-        // Before the read, so the count this captures is the patched one. Five stays under the
-        // sanity bound below.
+#if defined(OPTISCALER_RTX40_MFG)
         MfgUnlock::TryApply();
-
-        // nvngx_dlssg.dll can load after this runs, and the ceiling read before it does is Ada's
-        // 1. Caching that holds it for the session and clamps the override to it. ModuleFound
-        // means the patches have been attempted, so from there the answer is final either way.
-        const bool unlockPending =
-            Config::Instance()->FGDLSSGAdaMfgUnlock.value_or_default() && !MfgUnlock::LastStatus().ModuleFound;
+        if (const auto maximum = MfgUnlock::UnlockedMax(); maximum > 0)
+            state.dlssgMfgMax = std::max(state.dlssgMfgMax.value_or(0), static_cast<int>(maximum));
+#endif
 
         // Populate dlssgMfgMax once
-        if (!state.dlssgMfgMax.has_value() && !unlockPending)
+        if (!state.dlssgMfgMax.has_value()
+#if defined(OPTISCALER_RTX40_MFG)
+            && !MfgUnlock::Pending()
+#endif
+        )
         {
             sl::DLSSGState localState {};
             sl::DLSSGOptions localOptions {};
             if (o_slDLSSGGetState(viewport, localState, &localOptions) == sl::Result::eOk)
             {
-                // A wrapper ahead of the snippet can answer a lower ceiling than the patched one.
-                if (auto unlockedMax = MfgUnlock::UnlockedMax(); unlockedMax > localState.numFramesToGenerateMax)
-                    localState.numFramesToGenerateMax = unlockedMax;
-
                 if (localState.numFramesToGenerateMax > 0 && localState.numFramesToGenerateMax < 6)
                 {
                     state.dlssgMfgMax = localState.numFramesToGenerateMax;
@@ -1208,17 +1338,24 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     state.dlssgLastSetMode = newOptions.mode;
 
-    return o_slDLSSGSetOptions(viewport, newOptions);
+    const auto result = o_slDLSSGSetOptions(viewport, newOptions);
+
+#if defined(OPTISCALER_RTX40_MFG)
+    MfgUnlock::RecordSetOptions(requestedCount, newOptions.numFramesToGenerate, newOptions.mode != sl::DLSSGMode::eOff,
+                                static_cast<unsigned int>(result));
+#endif
+
+    return result;
 }
 
 sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport, sl::DLSSGState& state,
                                               const sl::DLSSGOptions* options)
 {
-    // Ahead of every read of numFramesToGenerateMax, which is the value the patch raises.
-    MfgUnlock::TryApply();
-
     sl::Result result {};
 
+#if defined(OPTISCALER_RTX40_MFG)
+    MfgUnlock::TryApply();
+#endif
     const auto originalStructVersion = state.structVersion;
     if (originalStructVersion < 4)
     {
@@ -1226,6 +1363,8 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
 
         // We might be feeding a newer struct to an older SL but that seems to work just fine for this Get function
         result = o_slDLSSGGetState(viewport, dynamic_cast<sl::DLSSGState&>(newState), options);
+        if (result != sl::Result::eOk)
+            return result;
 
         // Copy back data to game's struct
         memcpy(&state, &newState, 56); // struct ver 1 size
@@ -1236,12 +1375,6 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
             state.numFramesToGenerateMax = newState.numFramesToGenerateMax;
             state.bReserved4 = newState.bReserved4;
             state.bIsVsyncSupportAvailable = newState.bIsVsyncSupportAvailable;
-
-            // nvngx_dlssg.dll answers the real ceiling, but a Streamline wrapper between here and the
-            // snippet can carry a lower one of its own. Publish the unlocked count. Struct version 1
-            // ends ahead of this field, so the raise stays inside this branch.
-            if (auto unlockedMax = MfgUnlock::UnlockedMax(); unlockedMax > state.numFramesToGenerateMax)
-                state.numFramesToGenerateMax = unlockedMax;
         }
 
         if (originalStructVersion >= 3)
@@ -1252,16 +1385,32 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
         }
 
         State::Instance().dlssgGameDMFGSupported = newState.bIsDynamicMFGSupported == sl::eTrue;
+
+#if defined(OPTISCALER_RTX40_MFG)
+        // The real DLSS-G's count, unless our own frame generation stands in for it (it writes its own
+        // count further down).
+        if (State::Instance().activeFgInput != FGInput::DLSSG)
+            MfgUnlock::RecordState(newState.numFramesActuallyPresented);
+#endif
     }
     else
     {
         result = o_slDLSSGGetState(viewport, state, options);
+        if (result != sl::Result::eOk)
+            return result;
         State::Instance().dlssgGameDMFGSupported = state.bIsDynamicMFGSupported == sl::eTrue;
 
-        // The wrapper's ceiling, replaced by the unlocked count.
-        if (auto unlockedMax = MfgUnlock::UnlockedMax(); unlockedMax > state.numFramesToGenerateMax)
-            state.numFramesToGenerateMax = unlockedMax;
+#if defined(OPTISCALER_RTX40_MFG)
+        if (State::Instance().activeFgInput != FGInput::DLSSG)
+            MfgUnlock::RecordState(state.numFramesActuallyPresented);
+#endif
     }
+
+#if defined(OPTISCALER_RTX40_MFG)
+    // Version 1 has no maximum-count field: retain its ABI boundary.
+    if (originalStructVersion >= 2)
+        state.numFramesToGenerateMax = std::max(state.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
+#endif
 
     if (!State::Instance().dlssgGameDMFGSupported)
     {
@@ -1269,23 +1418,23 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
     }
 
     auto& optiState = State::Instance();
+#if defined(OPTISCALER_RTX40_MFG)
+    if (const auto maximum = MfgUnlock::UnlockedMax(); maximum > 0)
+        optiState.dlssgMfgMax = std::max(optiState.dlssgMfgMax.value_or(0), static_cast<int>(maximum));
+#endif
 
     if (optiState.streamlineVersion >= feature_version { 2, 7, 1 })
     {
-        // Provisional until the snippet has been seen. See the note in hkslDLSSGSetOptions.
-        const bool unlockPending =
-            Config::Instance()->FGDLSSGAdaMfgUnlock.value_or_default() && !MfgUnlock::LastStatus().ModuleFound;
-
-        if (!optiState.dlssgMfgMax.has_value() && !unlockPending)
+        if (!optiState.dlssgMfgMax.has_value()
+#if defined(OPTISCALER_RTX40_MFG)
+            && !MfgUnlock::Pending()
+#endif
+        )
         {
             sl::DLSSGState localState {};
             sl::DLSSGOptions localOptions {};
             if (o_slDLSSGGetState(viewport, localState, &localOptions) == sl::Result::eOk)
             {
-                // A wrapper ahead of the snippet can answer a lower ceiling than the patched one.
-                if (auto unlockedMax = MfgUnlock::UnlockedMax(); unlockedMax > localState.numFramesToGenerateMax)
-                    localState.numFramesToGenerateMax = unlockedMax;
-
                 if (localState.numFramesToGenerateMax > 0 && localState.numFramesToGenerateMax < 6)
                 {
                     optiState.dlssgMfgMax = localState.numFramesToGenerateMax;
@@ -1434,6 +1583,8 @@ void* StreamlineHooks::hkdlss_slGetPluginFunction(const char* functionName)
 
 void* StreamlineHooks::hkdlssg_slGetPluginFunction(const char* functionName)
 {
+    if (auto* hook = DlssNr::StreamlinePicture::Wrap(functionName, o_dlssg_slGetPluginFunction))
+        return hook;
     // LOG_DEBUG("{}", functionName);
 
     if (strcmp(functionName, "slOnPluginLoad") == 0)
@@ -1496,6 +1647,8 @@ void* StreamlineHooks::hkdlssg_slGetPluginFunction(const char* functionName)
 
 void* StreamlineHooks::hklocal_dlssg_slGetPluginFunction(const char* functionName)
 {
+    if (auto* hook = DlssNr::StreamlinePicture::Wrap(functionName, o_local_dlssg_slGetPluginFunction, true))
+        return hook;
     // LOG_DEBUG("{}", functionName);
 
     if (strcmp(functionName, "slOnPluginLoad") == 0 && State::Instance().activeFgNvngx != FGNvngxReplacement::None)
@@ -1778,33 +1931,52 @@ void StreamlineHooks::updateDlssgOptions()
     }
 }
 
-void StreamlineHooks::applyMenuDlssgInterlock(sl::DLSSGOptions& options, bool dlssgPotentiallyActive)
+void StreamlineHooks::applyMenuDlssgInterlock(sl::DLSSGOptions& options, bool potentiallyActive)
 {
     auto& state = State::Instance();
-
-    // Keyed on the overlay, not the swapchain: the submit this guards against is MenuOverlayVk's, and
-    // a title whose swapchainApi is not Vulkan can still have that overlay live.
     if (state.swapchainApi != API::Vulkan && !state.menuOverlayIsVulkan)
         return;
-
-    // Charged while the menu is hidden, spent by MenuOverlayVk::QueuePresent once it opens: the
-    // overlay holds off for 10 presents while DLSS-G unwinds. DX overlays do not use this delay.
-    if (dlssgPotentiallyActive && !MenuOverlayBase::IsVisible())
+    if (potentiallyActive && !MenuOverlayBase::IsVisible())
         state.delayMenuRenderBy = 10;
-
-    if (!MenuOverlayBase::IsVisible())
-        return;
-
-    options.mode = sl::DLSSGMode::eOff;
-    options.flags |= sl::DLSSGFlags::eRetainResourcesWhenOff;
-    ReflexHooks::setDlssgFrameCount(0);
+    if (MenuOverlayBase::IsVisible())
+    {
+        options.mode = sl::DLSSGMode::eOff;
+        options.flags |= sl::DLSSGFlags::eRetainResourcesWhenOff;
+        ReflexHooks::setDlssgFrameCount(0);
+    }
 }
 
 // SL INTERPOSER
 
-void StreamlineHooks::unhookInterposer()
+bool StreamlineHooks::unhookInterposer()
 {
     LOG_FUNC();
+
+    // nr-xefg R12 (W1/W2), review R2-H1: the OPTIONAL pair is removed FIRST, in its own transaction, and a
+    // failure to remove it stops the transition here - before any destructive core work - so the core hooks,
+    // the trampoline slots and the installed flags stay coherently associated with the old module. This
+    // function does not clear anything on that path; the replacement caller propagates the false, re-arms its
+    // retry guard and retries later.
+    SlPairDetours::DetachOutcome pairDetach;
+    const SlPairDetours::Targets pairTargets { (void**) &o_slGetNativeInterface, (void**) &o_slSetD3DDevice };
+    if (!SlPairDetours::RemoveOptionalPair(detoursApi, pairTargets, slPairState,
+                                           (void*) &hkslGetNativeInterface, (void*) &hkslSetD3DDevice, pairDetach))
+    {
+        if (slPairStatusAdmission.Admit())
+            LOG_ERROR("NR_XEFG_SL_PAIR_DETACH probe={}/{} state={} failed_step={} failed_hr={:X} "
+                      "getnative_installed={} setd3ddevice_installed={}",
+                      slPairStatusAdmission.Admitted(), DlssNr::NativeProbeAdmission::kBudget,
+                      pairDetach.aborted ? "detach_aborted" : "detach_failed",
+                      SlPairDetours::StepName(pairDetach.failedStep), (unsigned) pairDetach.failedHr,
+                      slPairState.installed.getNative ? 1u : 0u, slPairState.installed.setDevice ? 1u : 0u);
+        return false;
+    }
+
+    if (pairDetach.getNativeDetached)
+        o_slGetNativeInterface = nullptr;
+
+    if (pairDetach.setDeviceDetached)
+        o_slSetD3DDevice = nullptr;
 
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
@@ -1845,26 +2017,36 @@ void StreamlineHooks::unhookInterposer()
     if (detourResult != NO_ERROR)
     {
         LOG_ERROR("DetourTransactionCommit error: {:X}", detourResult);
+        return false;
     }
-    else
-    {
-        o_slInit = nullptr;
-        o_slInit_sl1 = nullptr;
-        o_slSetTag = nullptr;
-        o_slSetTagForFrame = nullptr;
-        o_slEvaluateFeature = nullptr;
-        o_slSetConstants = nullptr;
-        o_slSetTag_sl1 = nullptr;
-        o_slSetConstants_interposer_sl1 = nullptr;
-        o_slEvaluateFeature_sl1 = nullptr;
-        o_logCallback = nullptr;
-        o_logCallback_sl1 = nullptr;
-    }
+
+    o_slInit = nullptr;
+    o_slInit_sl1 = nullptr;
+    o_slSetTag = nullptr;
+    o_slSetTagForFrame = nullptr;
+    o_slEvaluateFeature = nullptr;
+    o_slSetConstants = nullptr;
+    o_slSetTag_sl1 = nullptr;
+    o_slSetConstants_interposer_sl1 = nullptr;
+    o_slEvaluateFeature_sl1 = nullptr;
+    o_logCallback = nullptr;
+    o_logCallback_sl1 = nullptr;
+
+    return true;
 }
 
 // Call it just after sl.interposer's load or if sl.interposer is already loaded
 void StreamlineHooks::hookInterposer(HMODULE slInterposer)
 {
+    // Install audit (todo 6): EVERY path below must stay reachable in every frame-generation ownership mode,
+    // because this function is what installs the slInit detour (`DetourAttach(&(PVOID&) o_slInit, hkslInit)`
+    // below) that carries the pre-slInit arming call. The reference fork guards this whole function with
+    //     if (State::Instance().externalFrameGeneration) return;
+    // (wilsjo2/main:OptiScaler/hooks/Streamline_Hooks.cpp:1866-1867), which skips the install exactly in the
+    // External-FG-ownership mode the 20/30 unlock runs in: the hook would never be installed, Arm() would
+    // never run, and the payload would never reach the game's capability decision. That guard is deliberately
+    // NOT ported - there is no ownership-mode early return here, and tools/check_ampere_arming_seam.py fails
+    // the build-side check if one is ever introduced.
     LOG_FUNC();
 
     if (!slInterposer)
@@ -1879,6 +2061,10 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
     if (last_slInterposer == slInterposer)
         return;
 
+    // nr-xefg R12 (review R2-H1): the guard is armed here, before the unhook, so a re-entrant call during the
+    // detour teardown is still swallowed exactly as before - and the previous value is kept so that a FAILED
+    // replacement can re-arm the guard and be retried with the same module later.
+    const HMODULE previous_slInterposer = last_slInterposer;
     last_slInterposer = slInterposer;
 
     // Looks like when reading DLL version load methods are called
@@ -1887,8 +2073,20 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
     State::DisableChecks(owner, "sl.interposer");
 
     if (o_slSetTag || o_slInit || o_slInit_sl1 || o_slSetTag_sl1 || o_slSetConstants_interposer_sl1 ||
-        o_slEvaluateFeature_sl1)
-        unhookInterposer();
+        o_slEvaluateFeature_sl1 || slPairState.installed.getNative || slPairState.installed.setDevice)
+    {
+        if (!unhookInterposer())
+        {
+            // A live hook set could not be fully removed. Re-arm the retry guard, re-enable checks and stop
+            // BEFORE resolving this module's exports or overwriting any pointer or flag (review R2-H1).
+            // No record is emitted HERE on purpose (review R3-M1): the failing operation already logged its
+            // own latched NR_XEFG_SL_PAIR_DETACH / core-commit record, and a second unlatched line would make
+            // the process-wide 24-record bound false whenever a replacement is retried repeatedly.
+            last_slInterposer = previous_slInterposer;
+            State::EnableChecks(owner);
+            return;
+        }
+    }
 
     {
         char dllPath[MAX_PATH];
@@ -1983,12 +2181,8 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
                 // if (o_slAllocateResources != nullptr)
                 //     DetourAttach(&(PVOID&) o_slAllocateResources, hkslAllocateResources);
 
-                // if (o_slGetNativeInterface != nullptr)
-                //     DetourAttach(&(PVOID&) o_slGetNativeInterface, hkslGetNativeInterface);
-
-                // if (o_slSetD3DDevice != nullptr)
-                //     DetourAttach(&(PVOID&) o_slSetD3DDevice, hkslSetD3DDevice);
-
+                // nr-xefg R12 (W1/W2): the optional pair detours are deliberately NOT part of this
+                // transaction - see the install block after this commit (review H1).
                 auto detourResult = DetourTransactionCommit();
                 if (detourResult != NO_ERROR)
                 {
@@ -1999,13 +2193,46 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
                     o_slEvaluateFeature = nullptr;
                     o_slAllocateResources = nullptr;
                     o_slSetConstants = nullptr;
-                    o_slGetNativeInterface = nullptr;
-                    o_slSetD3DDevice = nullptr;
                     o_slIsFeatureSupported = nullptr;
                     o_slIsFeatureLoaded = nullptr;
                     o_slGetFeatureRequirements = nullptr;
                     o_slGetFeatureVersion = nullptr;
                     o_slGetFeatureFunction = nullptr;
+                }
+                else
+                {
+                    // nr-xefg R12 (W1/W2), review H1: the pair detours are OPTIONAL and are installed only
+                    // here - after the core set above committed, in their OWN transaction - so a failure to
+                    // attach them can never disable slInit or any other functional hook. SlPairDetours
+                    // aborts only its own transaction on the first failing step, reports which step failed,
+                    // clears no trampoline pointer, and its `installed` flags are the only detach authority.
+                    // Detours applies a transaction's patches as one commit, but DetourUpdateThread enlists
+                    // only the calling thread: other threads are not quiesced, so the pre-existing startup
+                    // quiescence assumption still holds and is not strengthened by this placement.
+                    SlPairDetours::Targets pairTargets { (void**) &o_slGetNativeInterface, (void**) &o_slSetD3DDevice };
+                    const auto pairInstall = SlPairDetours::Install(detoursApi, pairTargets,
+                                                                    (void*) &hkslGetNativeInterface,
+                                                                    (void*) &hkslSetD3DDevice);
+                    slPairState.installed = pairInstall.installed;
+
+                    // Installation status: INFO so "no NR_XEFG_SL_* data record" stays interpretable even when
+                    // DEBUG is suppressed, and admitted through its own process latch (review R2-M3) so the whole
+                    // revision stays finite: 16 data records + 8 status records = 24.
+                    const char* pairInstallState =
+                        pairInstall.failedStep != SlPairDetours::Step::None
+                            ? "failed"
+                        : (pairInstall.installed.getNative || pairInstall.installed.setDevice) ? "installed"
+                                                                                             : "no_target";
+                    if (slPairStatusAdmission.Admit())
+                        LOG_INFO("NR_XEFG_SL_PAIR_DETOUR probe={}/{} state={} slInit_core=committed failed_step={} "
+                                 "failed_hr={:X} aborted={} getnative_target={} setd3ddevice_target={} "
+                                 "getnative_installed={} setd3ddevice_installed={}",
+                                 slPairStatusAdmission.Admitted(), DlssNr::NativeProbeAdmission::kBudget,
+                                 pairInstallState, SlPairDetours::StepName(pairInstall.failedStep),
+                                 (unsigned) pairInstall.failedHr, pairInstall.aborted ? 1u : 0u,
+                                 o_slGetNativeInterface != nullptr ? 1u : 0u, o_slSetD3DDevice != nullptr ? 1u : 0u,
+                                 slPairState.installed.getNative ? 1u : 0u,
+                                 slPairState.installed.setDevice ? 1u : 0u);
                 }
             }
         }
@@ -2146,6 +2373,11 @@ void StreamlineHooks::hookDlssg(HMODULE slDlssg)
         LOG_WARN("Dlssg module in NULL");
         return;
     }
+
+#if defined(OPTISCALER_RTX40_MFG)
+    // The game's copy or the driver's OTA one; both come through here.
+    MfgUnlock::OnStreamlinePluginLoaded(slDlssg);
+#endif
 
     if (o_dlssg_slGetPluginFunction)
         unhookDlssg();

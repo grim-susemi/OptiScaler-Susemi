@@ -1,0 +1,14 @@
+{
+ "candidates": [
+  {
+   "msgid": "Reset Depth Values",
+   "classes": [
+    "Button"
+   ],
+   "sites": [
+    "fixture"
+   ],
+   "occurrences": 1
+  }
+ ]
+}

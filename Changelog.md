@@ -1,5 +1,12 @@
 ## Release and Build Change Log (Newest to Oldest)
 
+## susemi-next (wilsjo2 v0.8.8 base) - native XeFG MFG unlock
+* Ports upstream OptiScaler `bb1619ec` (Coldwood1026) natively: XeFG multi frame generation unlock and above-2X frame pacing, with no external ASI unlocker.
+* New `[XeFG]` keys: `UnlockMFG` (default false), `MaxInterpolatedFrames` (default 5, 6X ceiling, hard bound 31), `ExtraPacing` (default true).
+* Menu: named 2X/3X/4X multiplier entries plus `Custom...`, and an Extra Pacing checkbox. Above 4X needs VSync or a frame-rate cap.
+* The unlock patches the provider in memory only, verifies every byte it writes and rolls the whole set back on a mismatch. An external ASI unlocker must not be loaded alongside it.
+* Docs: [MFG unlock](docs/README-XeFG-MFG-Unlock.md), [pacing](docs/README-XeFG-Pacing.md), Korean summary in [INSTALL-KO.md](INSTALL-KO.md).
+
 ## v0.7.8
 * Everything after 0.7.7-pre9 including major FSR4, HUDfix, UI improvements, SL spoof, ASI loading support, auto game patches etc.
 * More OptiFG improvements

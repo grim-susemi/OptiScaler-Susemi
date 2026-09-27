@@ -1,0 +1,5 @@
+{
+ "name": "token-dropped",
+ "expect_code": "token-dropped",
+ "expect_key": "Apply %s to %d textures"
+}

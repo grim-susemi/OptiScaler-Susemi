@@ -1,0 +1,11 @@
+{
+ "schema": 1,
+ "language": "ko",
+ "locale": "ko-KR",
+ "entries": {
+  "DLSS Settings": "고급 설정"
+ },
+ "keep_latin": [
+  "DLSS"
+ ]
+}

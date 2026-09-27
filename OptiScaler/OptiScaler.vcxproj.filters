@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Header Files">
@@ -84,6 +84,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="BuildInfo.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="resource.h">
@@ -407,7 +410,13 @@
     <ClInclude Include="framegen\IFGFeature_Dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="hudfix\Hudfix_Dx11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="hudfix\Hudfix_Dx12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource_tracking\ResTrack_dx11.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="resource_tracking\ResTrack_dx12.h">
@@ -495,6 +504,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="proxies\XeFG_Proxy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="proxies\XeFGPacing.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="proxies\XeFGUnlock.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="proxies\XeLL_Proxy.h">
@@ -773,6 +788,32 @@
     <ClInclude Include="proxies\Streamline_Proxy.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_Exposure.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="gpu_time\Vitals.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="framegen\dlssg\MfgUnlock.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\Kcd2Hdr.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\MfgUnlockFlip.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\MfgUnlockMethod.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\MfgUnlockPlugin.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\MfgUnlockProvider.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\MfgUnlockPtx.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\AmpereMfgLoader.h">
+      <Filter>framegen</Filter>
+    </ClInclude>
     <ClInclude Include="framegen\dlssg\DLSSG_Dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -887,6 +928,9 @@
     <ClInclude Include="with_dx12\with_dx12.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_FinishedPictureBridge_Dx11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="shaders\magnifier\Magnifier_Common.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -950,10 +994,19 @@
     <ClInclude Include="shaders\magnifier\precompile\Magnifier_Shader_Vk.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="shaders\hud_copy\HudCopy_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\hud_copy\precompile\HudCopy_Shader_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Config.cpp">
       <Filter>Config</Filter>
+    </ClCompile>
+    <ClCompile Include="BuildInfo.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Util.cpp">
@@ -1187,7 +1240,13 @@
     <ClCompile Include="framegen\IFGFeature_Dx12.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="hudfix\Hudfix_Dx11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="hudfix\Hudfix_Dx12.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="resource_tracking\ResTrack_dx11.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="resource_tracking\ResTrack_dx12.cpp">
@@ -1373,6 +1432,15 @@
     <ClCompile Include="misc\IdentifyGpu.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="framegen\dlssg\MfgUnlock.cpp">
+      <Filter>framegen</Filter>
+    </ClCompile>
+    <ClCompile Include="framegen\dlssg\AmpereMfgLoader.cpp">
+      <Filter>framegen</Filter>
+    </ClCompile>
+    <ClCompile Include="framegen\dlssg\Kcd2Hdr.cpp">
+      <Filter>framegen</Filter>
+    </ClCompile>
     <ClCompile Include="framegen\dlssg\DLSSG_Dx12.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1532,6 +1600,9 @@
     <ClCompile Include="shaders\magnifier\Magnifier_Vk.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="shaders\hud_copy\HudCopy_Vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="OptiScaler.rc" />
@@ -1541,5 +1612,118 @@
       <Filter>Source Files</Filter>
     </None>
     <None Include="shaders\magnifier\precompile\Magnifier_Shader_Vk.spv" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="dlssnr\DlssNr_Status.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_PipelineUi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_Proxy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\dlssnr\DlssNr_Dx12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="shaders\dlssnr\DlssNr_Common.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="upscalers\ShaderPipeline_Dx12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_Status.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="upscalers\ShaderPipeline_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dlssnr\DlssNrPipeline_Vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dlssnr\DlssNrFinished_Vk.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNrFinished_Vk.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="dlssnr\DlssNr.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_Readback.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_Image_Vk.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_Capture.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_PipelineCapture.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_GpuLifetime.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_GpuLifetime.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_XeFGHandoff.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_XeFGHandoff.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_FinishedConsumer.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_HoldParameters_Dx12.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_Menu.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="dlssnr\DlssNr_MenuControls.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="dlssnr\DlssNr_MenuOverlay.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_MenuOverlay.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_MenuSections.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_Pipeline_Dx12.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_Pipeline_Dx12.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_Proxy.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_Upscaler.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_VkExtensions.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNrFeature_Dx12.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNrFeature_Vk.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNrFeature_Vk.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNrFeature_Vk_Internal.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNrFeature_Vk_Model.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\PassProfiles.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_ModelParameters.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="shaders\dlssnr\DlssNr_ActiveColor.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="shaders\dlssnr\DlssNr_GpuTime.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="shaders\dlssnr\DlssNr_Guides.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="shaders\dlssnr\DlssNr_SeamClock.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Upscaler_Dx12.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="shaders\dlssnr\DlssNr_Upscaler_Dx12.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Vk.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="shaders\dlssnr\DlssNr_Vk.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_DeferredSr.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Enlarge.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_FinishedCompose.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_FinishedQueue.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Hold.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Late.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Resources.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Run.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="shaders\dlssnr\DlssNr_Dx12_State.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Status.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Models.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="dlssnr\DlssNr_Placement.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_FinishedReady.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_StreamlinePicture.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_StreamlinePicture.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dlssnr\DlssNr_CompatibilityRuntime.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="dlssnr\DlssNr_CompatibilityRuntimePaths.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_CompatibilityRuntime.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="dlssnr\DlssNr_RuntimeImports.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dlssnr\DlssNrFeature_Vk_Resources.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="shaders\dlssnr\DlssNr_ResidualPair.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="shaders\dlssnr\DlssNr_LateSlot.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Evaluate.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Encode.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="shaders\dlssnr\DlssNr_Dx12_ModelState.h"><Filter>Header Files</Filter></ClInclude>
+    <ClCompile Include="dlssnr\DlssNr_NgxDiagnostics.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_NgxDiagnostics.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
 </Project>

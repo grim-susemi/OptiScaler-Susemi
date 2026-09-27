@@ -1,5 +1,6 @@
 REM Setup OptiScaler for your game
 @echo off
+chcp 65001 >nul
 cls
 echo  ::::::::  :::::::::  ::::::::::: :::::::::::  ::::::::   ::::::::      :::     :::        :::::::::: :::::::::  
 echo :+:    :+: :+:    :+:     :+:         :+:     :+:    :+: :+:    :+:   :+: :+:   :+:        :+:        :+:    :+: 
@@ -17,6 +18,23 @@ del "!! README_EXTRACT ALL FILES TO GAME FOLDER !!.txt" 2>nul
 
 setlocal enabledelayedexpansion
 
+REM --- Language gate: Korean default, [2] English ---
+echo.
+echo  [1] 한국어 (기본)
+echo  [2] English
+echo.
+set "LANG=ko"
+choice /c 12 /n /m "언어를 선택하세요 / Select language [1/2]: "
+if errorlevel 2 set "LANG=en"
+echo.
+
+REM --- Susemi-next KO identity (banner block) ---
+if "%LANG%"=="ko" echo  Susemi-next 한국어 UI 팩 - wilsjo2 v0.8.8 기반
+if not "%LANG%"=="ko" echo  Susemi-next UI Language Pack - wilsjo2 v0.8.8 based
+if "%LANG%"=="ko" echo  한국어가 기본 언어로 선택되었습니다. [2] English를 고르면 영어로 진행합니다.
+if not "%LANG%"=="ko" echo  Korean is selected as the default language. Choose [2] English to proceed in English.
+echo.
+
 if exist OptiScaler.sln (
     echo Detected OptiScaler.sln or .git files^^!
     echo.
@@ -33,7 +51,8 @@ if exist OptiScaler.sln (
 
 if not exist OptiScaler.dll (
     echo OptiScaler "OptiScaler.dll" file is not found^^!
-    echo Detected a folder permissions issue most likely. Might have more luck running the BAT as admin.
+    set "CE_TEXT=Detected a folder permissions issue most likely. Might have more luck running the BAT as admin."
+    call :cEcho Red
     echo.
 	echo OR
 	echo.
@@ -75,44 +94,67 @@ if "!OLD_FILES_FOUND!"=="1" (
     if exist "Remove_OptiScaler.bat" echo   - Remove_OptiScaler.bat
     for %%F in (!OPTI_DLL_LIST!) do echo   - %%F ^(original filename: OptiScaler.dll^)
     echo.
+    if "%LANG%"=="ko" goto delOld_ko
+:delOld_en
     echo These files may conflict with the current version of OptiScaler.
     echo It is recommended to delete them.
     echo.
-    echo Do you want to delete these files?
+    set "CE_TEXT=Do you want to delete these files?"
+    call :cEcho White
     echo.
 	echo [1] Yes
     echo [2] No
     echo.
 	set /p "USER_CHOICE=Waiting - "
+    goto delOld_cont
+:delOld_ko
+    echo 다음 파일들이 현재 버전의 OptiScaler와 충돌할 수 있습니다.
+    echo 삭제하는 것을 권장합니다.
+    echo.
+    set "CE_TEXT=이 파일들을 삭제하시겠습니까?"
+    call :cEcho White
+    echo.
+    echo [1] 예
+    echo [2] 아니요
+    echo.
+	set /p "USER_CHOICE=Waiting - "
+:delOld_cont
 	echo.
     if /i "!USER_CHOICE!"=="1" (
         if exist nvapi64.dll (
             del nvapi64.dll
-            echo Deleted nvapi64.dll
+            set "CE_TEXT=Deleted nvapi64.dll"
+            call :cEcho Green
         )
         if exist nvngx.dll (
             del nvngx.dll
-            echo Deleted nvngx.dll
+            set "CE_TEXT=Deleted nvngx.dll"
+            call :cEcho Green
         )
         if exist OptiScaler.asi (
             del OptiScaler.asi
-            echo Deleted OptiScaler.asi
+            set "CE_TEXT=Deleted OptiScaler.asi"
+            call :cEcho Green
         )
 		if exist "Remove OptiScaler.bat" (
             del "Remove OptiScaler.bat"
-            echo Deleted Remove OptiScaler.bat
+            set "CE_TEXT=Deleted Remove OptiScaler.bat"
+            call :cEcho Green
         )
         if exist "Remove_OptiScaler.bat" (
             del "Remove_OptiScaler.bat"
-            echo Deleted Remove_OptiScaler.bat
+            set "CE_TEXT=Deleted Remove_OptiScaler.bat"
+            call :cEcho Green
         )
         for %%F in (!OPTI_DLL_LIST!) do (
             del "%%F"
-            echo Deleted %%F
+            set "CE_TEXT=Deleted %%F"
+            call :cEcho Green
         )
         echo Done^^!
     ) else (
-        echo Skipping deletion. Note that these files may cause issues.
+        set "CE_TEXT=Skipping deletion. Note that these files may cause issues."
+        call :cEcho Yellow
     )
     echo.
 )
@@ -124,17 +166,35 @@ set setupSuccess=false
 
 REM Check if the Engine folder exists
 if exist ".\Engine" (
+    if "%LANG%"=="ko" goto engine_ko
+:engine_en
     echo Found Engine folder. If this is an Unreal Engine game, then please extract Optiscaler to #CODENAME#\Binaries\Win64
 	echo Do not extract to the Engine folder^^!
 	echo.
 	echo Example - \Jedi Survivor\SwGame\Binaries\Win64, \Witchfire\Witchfire\Binaries\Win64
     echo.
-    echo Continue installation to current folder?
+    set "CE_TEXT=Continue installation to current folder?"
+    call :cEcho White
 	echo. 
     echo [1] Yes
     echo [2] No
     echo.
 	set /p continueChoice="Waiting - "
+    goto engine_cont
+:engine_ko
+    echo Engine 폴더가 감지되었습니다. 언리얼 엔진 게임이라면 #CODENAME#\Binaries\Win64로 OptiScaler를 풀어 넣으세요.
+	echo Engine 폴더에는 풀지 마세요^^!
+	echo.
+	echo 예 - \Jedi Survivor\SwGame\Binaries\Win64, \Witchfire\Witchfire\Binaries\Win64
+    echo.
+    set "CE_TEXT=현재 폴더에 설치를 계속하시겠습니까?"
+    call :cEcho White
+	echo. 
+    echo [1] 예
+    echo [2] 아니요
+    echo.
+	set /p continueChoice="Waiting - "
+:engine_cont
     set continueChoice=!continueChoice: =!
 
     if "!continueChoice!"=="1" (
@@ -147,6 +207,8 @@ if exist ".\Engine" (
 REM Prompt user to select a filename for OptiScaler
 :selectFilename
 echo.
+if "%LANG%"=="ko" goto selName_ko
+:selName_en
 echo Choose a filename for OptiScaler (default is dxgi.dll, most compatible):
 echo (For Vulkan, use winmm.dll. For XGP/MS Store, winmm/version.dll may be better)
 echo.
@@ -160,6 +222,22 @@ echo  [7] winhttp.dll
 echo  [8] OptiScaler.asi
 echo.
 set /p filenameChoice="Enter 1-8 (or press Enter for default): "
+goto selName_cont
+:selName_ko
+echo OptiScaler 파일 이름을 선택하세요 (기본: dxgi.dll, 호환성이 가장 좋음):
+echo (Vulkan은 winmm.dll, XGP/MS Store는 winmm/version.dll이 더 나을 수 있음)
+echo.
+echo  [1] dxgi.dll
+echo  [2] winmm.dll
+echo  [3] version.dll
+echo  [4] dbghelp.dll
+echo  [5] d3d12.dll
+echo  [6] wininet.dll
+echo  [7] winhttp.dll
+echo  [8] OptiScaler.asi
+echo.
+set /p filenameChoice="1-8을 입력하세요 (기본은 Enter): "
+:selName_cont
 
 if "%filenameChoice%"=="" (
     set selectedFilename="dxgi.dll"
@@ -180,21 +258,38 @@ if "%filenameChoice%"=="" (
 ) else if "%filenameChoice%"=="8" (
     set selectedFilename="OptiScaler.asi"
 ) else (
-    echo Invalid choice. Please select a valid option.
+    set "CE_TEXT=Invalid choice. Please select a valid option."
+    call :cEcho Red
     echo.
     goto selectFilename
 )
 
 if exist %selectedFilename% (
     echo.
-    echo WARNING: %selectedFilename% already exists in the current folder.
+    if "%LANG%"=="ko" goto overwrite_ko
+:overwrite_en
+    set "CE_TEXT=WARNING: %selectedFilename% already exists in the current folder."
+    call :cEcho Yellow
     echo.
-	echo Do you want to overwrite %selectedFilename%?
+	set "CE_TEXT=Do you want to overwrite %selectedFilename%?"
+	call :cEcho White
 	echo.
     echo [1] Yes
     echo [2] No
     echo.
 	set /p overwriteChoice="Waiting - "
+    goto overwrite_cont
+:overwrite_ko
+    echo 경고: %selectedFilename%이^(가^) 이미 현재 폴더에 있습니다.
+    echo.
+	set "CE_TEXT=%selectedFilename%을(를) 덮어쓰시겠습니까?"
+	call :cEcho White
+	echo.
+    echo [1] 예
+    echo [2] 아니요
+    echo.
+	set /p overwriteChoice="Waiting - "
+:overwrite_cont
     set overwriteChoice=!overwriteChoice: =!
     
     echo.
@@ -227,7 +322,8 @@ if exist %windir%\system32\nvapi64.dll (
 
 REM Query user for GPU type
 echo.
-echo Are you using an Nvidia GPU or AMD/Intel GPU?
+set "CE_TEXT=Are you using an Nvidia GPU or AMD/Intel GPU?"
+call :cEcho White
 echo.
 echo [1] AMD/Intel
 echo [2] Nvidia
@@ -242,7 +338,8 @@ if "%isNvidia%"=="true" (
 
 if "%gpuChoice%"=="1" goto gpuValid
 if "%gpuChoice%"=="2" goto gpuValid
-echo Invalid input. Please enter 1 or 2.
+set "CE_TEXT=Invalid input. Please enter 1 or 2."
+call :cEcho Red
 echo.
 goto gpuPrompt
 
@@ -255,6 +352,8 @@ if "%gpuChoice%"=="2" (
 
 REM Query user for DLSS
 echo.
+if "%LANG%"=="ko" goto dlss_ko
+:dlss_en
 echo Will you try to use DLSS inputs to replace with FSR/XeSS? (enables Nvidia spoofing, required for DLSS-FG, Reflex-^>AL2)
 echo If you want to change the setting later, edit OptiScaler.ini and set Dxgi=false to disable spoofing and reverse.
 echo.
@@ -262,11 +361,22 @@ echo [1] Yes
 echo [2] No
 echo.
 set /p enablingSpoofing="Enter 1 or 2 (or press Enter for Yes): "
+goto dlss_cont
+:dlss_ko
+echo DLSS 입력을 FSR/XeSS로 대체하시겠습니까? (Nvidia 스푸핑 활성화, DLSS-FG와 Reflex-^>AL2에 필요)
+echo 나중에 설정을 바꾸려면 OptiScaler.ini에서 Dxgi=false로 설정해 스푸핑을 해제하세요.
+echo.
+echo [1] 예
+echo [2] 아니요
+echo.
+set /p enablingSpoofing="1 또는 2를 입력하세요 (기본은 Enter=예): "
+:dlss_cont
 
 set configFile=OptiScaler.ini
 if "%enablingSpoofing%"=="2" (
     if not exist "%configFile%" (
-        echo Config file not found: %configFile%
+        set "CE_TEXT=Config file not found: %configFile%"
+        call :cEcho Red
         pause
     )
 
@@ -288,15 +398,29 @@ for %%F in (OptiScaler\plugins\*OptiPatcher*.asi) do (
 
 if defined foundOptiPatcher (
     echo.
+    if "%LANG%"=="ko" goto redl_ko
+:redl_en
     echo OptiPatcher found: !foundOptiPatcher!
     echo If the existing version works properly, might be best to keep it.
-	echo Do you want to re-download a possibly newer version?
+	set "CE_TEXT=Do you want to re-download a possibly newer version?"
+	call :cEcho White
 	echo.
     echo [1] Yes
     echo [2] No
     echo.
 	set /p optiRedownload="Waiting - "
-        
+    goto redl_cont
+:redl_ko
+    echo OptiPatcher 발견: !foundOptiPatcher!
+    echo 기존 버전이 제대로 작동한다면 그대로 둔 것이 좋을 수 있습니다.
+	set "CE_TEXT=더 새로운 버전을 다시 다운로드하시겠습니까?"
+	call :cEcho White
+	echo.
+    echo [1] 예
+    echo [2] 아니요
+    echo.
+	set /p optiRedownload="Waiting - "
+:redl_cont
     if /i "!optiRedownload!"=="1" (
         echo.
         echo Deleting !foundOptiPatcher!...
@@ -315,12 +439,14 @@ goto checkOptiPatcher
 :checkOptiPatcher
 REM Check connectivity
 echo.
-echo Checking for OptiPatcher compatibility...
+set "CE_TEXT=Checking for OptiPatcher compatibility..."
+call :cEcho Cyan
 echo Press Ctrl+C if this gets stuck to skip to setup completion.
 
 ping -n 1 -w 3000 github.com >nul 2>&1
 if %errorlevel% neq 0 (
-    echo Offline or GitHub blocked. Skipping OptiPatcher check.
+    set "CE_TEXT=Offline or GitHub blocked. Skipping OptiPatcher check."
+    call :cEcho Yellow
     goto completeSetup
 )
 
@@ -331,40 +457,62 @@ for /f "usebackq tokens=*" %%A in (`powershell -Command "& { $rawUrl = 'https://
 
 if "!OPTI_MATCH!"=="YES" (
     echo.
+    if "%LANG%"=="ko" goto dlopt_ko
+:dlopt_en
     echo OptiPatcher support detected^^!
     echo An Opti plugin used for unlocking DLSS/DLSS-FG inputs, avoiding spoofing and performance overhead in supported games.
     echo More info available on OptiPatcher Github
     echo.
-	echo Download OptiPatcher.asi?
+	set "CE_TEXT=Download OptiPatcher.asi?"
+	call :cEcho White
     echo.
 	echo [1] Yes
     echo [2] No
     echo.
 	set /p downloadOptiPatcher="Waiting - "
+    goto dlopt_cont
+:dlopt_ko
+    echo OptiPatcher 지원이 감지되었습니다^^!
+    echo 지원되는 게임에서 DLSS/DLSS-FG 입력을 잠금 해제하고 스푸핑 및 성능 오버헤드를 피하기 위한 Opti 플러그인입니다.
+    echo 자세한 내용은 OptiPatcher Github에서 확인하세요.
+    echo.
+	set "CE_TEXT=OptiPatcher.asi를 다운로드하시겠습니까?"
+	call :cEcho White
+    echo.
+	echo [1] 예
+    echo [2] 아니요
+    echo.
+	set /p downloadOptiPatcher="Waiting - "
+:dlopt_cont
     set downloadOptiPatcher=!downloadOptiPatcher: =!
     
     if "!downloadOptiPatcher!"=="1" (
         echo.
-        echo Preparing plugins folder...
+        set "CE_TEXT=Preparing plugins folder..."
+        call :cEcho Cyan
         if not exist "OptiScaler\plugins" mkdir "OptiScaler\plugins"
         
-        echo Downloading OptiPatcher...
+        set "CE_TEXT=Downloading OptiPatcher..."
+        call :cEcho Cyan
         echo Press Ctrl+C if this gets stuck to skip to setup completion.
         echo.
         powershell -Command "Invoke-WebRequest -Uri 'https://github.com/optiscaler/OptiPatcher/releases/download/rolling/OptiPatcher.asi' -OutFile 'OptiScaler\plugins\OptiPatcher.asi'"
         if errorlevel 1 goto completeSetup
         
         if exist "OptiScaler\plugins\OptiPatcher.asi" (
-            echo OptiPatcher.asi downloaded successfully.
+            set "CE_TEXT=OptiPatcher.asi downloaded successfully."
+            call :cEcho Green
             echo Enabling ASI loading in OptiScaler.ini...
             if exist "%configFile%" (
                 powershell -Command "(Get-Content '%configFile%') -replace 'LoadAsiPlugins=auto', 'LoadAsiPlugins=true' | Set-Content '%configFile%'"
                 echo Successfully enabled ASI loading in OptiScaler.ini^^!
             ) else (
-                echo Warning: OptiScaler.ini not found, could not enable LoadAsiPlugins.
+                set "CE_TEXT=Warning: OptiScaler.ini not found, could not enable LoadAsiPlugins."
+                call :cEcho Yellow
             )
         ) else (
-            echo Failed to download OptiPatcher.asi.
+            set "CE_TEXT=Failed to download OptiPatcher.asi."
+            call :cEcho Red
         )
      timeout /t 3
     )
@@ -377,15 +525,18 @@ goto completeSetup
 REM Rename OptiScaler file
 echo.
 if "!overwriteChoice!"=="1" (
-    echo Removing previous %selectedFilename%...
+    set "CE_TEXT=Removing previous %selectedFilename%..."
+    call :cEcho Cyan
     del /F %selectedFilename% 
 )
 
-echo Renaming OptiScaler file to %selectedFilename%...
+set "CE_TEXT=Renaming OptiScaler file to %selectedFilename%..."
+call :cEcho Cyan
 rename "%optiScalerFile%" %selectedFilename%
 if errorlevel 1 (
     echo.
-    echo ERROR: Failed to rename OptiScaler file to %selectedFilename%. Most likely due to folder permissions issues.
+    set "CE_TEXT=ERROR: Failed to rename OptiScaler file to %selectedFilename%. Most likely due to folder permissions issues."
+    call :cEcho Red
     echo Please rename OptiScaler.dll manually to %selectedFilename%^^! No need to run setup BAT again after that.
     echo.
     goto end
@@ -396,7 +547,8 @@ goto create_uninstaller
 :create_uninstaller_return
 
 cls
-echo  OptiScaler setup completed successfully...
+set "CE_TEXT= OptiScaler setup completed successfully..."
+call :cEcho Green
 echo.
 echo   ___                 
 echo  (_         '        
@@ -406,46 +558,14 @@ echo.
 
 set setupSuccess=true
 
-REM --- DLSS 5 Neural Rendering ---------------------------------------------------------------
-REM The model ships in an NVIDIA driver package and cannot be redistributed here, so the user has
-REM to supply it. Saying where it goes, and whether it is already there, heads off the single most
-REM common reason for the feature to sit silently disabled.
-echo.
-echo  ------------------------------------------------------------------
-echo   DLSS 5 Neural Rendering
-echo  ------------------------------------------------------------------
-echo.
-if exist "nvngx_dlssnr.dll" (
-    echo   nvngx_dlssnr.dll found here. Neural Rendering can run.
-) else (
-    echo   nvngx_dlssnr.dll was NOT found in this folder.
+REM Neural Rendering is optional; install the model separately as documented in INSTALL-DLSSNR.md.
+if "%setupSuccess%"=="true" (
     echo.
-    echo   Neural Rendering needs it. It cannot ship with OptiScaler because
-    echo   it comes from an NVIDIA driver package, so copy it into THIS
-    echo   folder - the same one holding the game executable and the file
-    echo   OptiScaler was just renamed to.
-    echo.
-    echo   One copy per game. There is no shared or system-wide location.
+    echo Neural Rendering is off by default. See INSTALL-DLSSNR.md for the model runtime
+    echo and enable it in the OptiScaler overlay when the ordinary upscaler works.
+    echo NR uses OptiScaler, your nvngx_dlssnr.dll, and the installed NVIDIA driver.
+    echo No separate NR helper DLL is required or supplied.
 )
-echo.
-echo   Two similarly named files matter here, one character apart:
-echo.
-echo     nvngx.dll_dlssnr.dll   ships in this package  ^(about 13 KB^)
-echo     nvngx_dlssnr.dll       you supply it          ^(about 165 MB^)
-echo.
-echo   To check you have the right file: Properties ^> Details should
-echo   read "NVIDIA DLSSNR" at about 165 MB. A file that size named
-echo   nvngx_dlssd.dll is this model misnamed, not Ray Reconstruction -
-echo   installing it as Ray Reconstruction breaks that instead.
-echo.
-echo   Neural Rendering is OFF by default. Turn it on in the OptiScaler
-echo   overlay under "DLSS Neural Rendering", or set Enabled=true under
-echo   the DlssNr section of OptiScaler.ini.
-echo.
-echo   Needs an RTX 50 series card and a driver new enough to ship the
-echo   model. If it cannot run, the overlay says why rather than failing
-echo   quietly.
-echo.
 
 :end
 pause
@@ -456,6 +576,12 @@ if "%setupSuccess%"=="true" (
 )
 
 exit /b
+
+REM --- cEcho: one colored line per screen accent (single Write-Host call) ---
+:cEcho
+REM %1 = ForegroundColor (Cyan/Green/Yellow/Red/White); text from CE_TEXT; +[char]13 keeps echo-like CRLF
+powershell -NoProfile -Command "Write-Host ($env:CE_TEXT + [char]13) -ForegroundColor %1"
+exit /b 0
 
 :create_uninstaller
 setlocal DisableDelayedExpansion
@@ -474,6 +600,11 @@ echo echo  ########  ###            ###     ###########  ########   ########  ##
 echo echo.
 echo echo Coping is strong with this one...
 echo echo v2.8 - now with OptiPatcher support
+echo echo.
+echo if "%LANG%"=="ko" echo Susemi-next 한국어 UI 팩 - wilsjo2 v0.8.8 기반
+echo if not "%LANG%"=="ko" echo Susemi-next UI Language Pack - wilsjo2 v0.8.8 based
+echo if "%LANG%"=="ko" echo 한국어가 기본 언어로 선택되었습니다. [2] English를 고르면 영어로 진행합니다.
+echo if not "%LANG%"=="ko" echo Korean is selected as the default language. Choose [2] English to proceed in English.
 echo echo.
 echo REM Check if OptiScaler installation exists
 echo set "OLD_FILES_FOUND=0"
@@ -494,16 +625,20 @@ echo     ^)
 echo ^)
 
 echo if "!OLD_FILES_FOUND!"=="1" ^(
-echo     echo Existing OptiScaler installation detected^^^^!
+echo     if "%LANG%"=="ko" echo 기존 OptiScaler 설치가 감지되었습니다^^^^!
+echo     if not "%LANG%"=="ko" echo Existing OptiScaler installation detected^^^^!
 echo     if exist OptiScaler.asi echo   - OptiScaler.asi
 echo     for %%%%F in ^(!OPTI_DLL_LIST!^) do echo   - %%%%F - original filename: OptiScaler.dll
 echo     echo.
 echo ^)
 
-echo echo Do you want to remove OptiScaler?
+echo if "%LANG%"=="ko" echo OptiScaler를 제거하시겠습니까?
+echo if not "%LANG%"=="ko" echo Do you want to remove OptiScaler?
 echo echo.
-echo echo [1] Yes
-echo echo [2] No
+echo if "%LANG%"=="ko" echo [1] 예
+echo if not "%LANG%"=="ko" echo [1] Yes
+echo if "%LANG%"=="ko" echo [2] 아니요
+echo if not "%LANG%"=="ko" echo [2] No
 echo echo.
 echo set /p removeChoice="Waiting - "
 echo echo.
@@ -522,18 +657,21 @@ echo     rd OptiScaler\Streamline
 echo     del /Q OptiScaler\streamline\*
 echo     rd OptiScaler\streamline
 echo     echo.
-echo     echo Deleting OptiPatcher if present
+echo     if "%LANG%"=="ko" echo OptiPatcher가 있으면 삭제합니다
+echo     if not "%LANG%"=="ko" echo Deleting OptiPatcher if present
 echo     del /Q OptiScaler\plugins\*
 echo     rd OptiScaler\plugins
 echo     echo.
 echo     del /Q OptiScaler\*
 echo     rd OptiScaler
 echo     echo.
-echo     echo OptiScaler removed^^^^! Ignore the warnings about missing files.
+echo     if "%LANG%"=="ko" echo OptiScaler가 제거되었습니다^^^^! 없는 파일 경고는 무시하세요.
+echo     if not "%LANG%"=="ko" echo OptiScaler removed^^^^! Ignore the warnings about missing files.
 echo     echo.
 echo ^) else ^(
 echo     echo.
-echo     echo Operation cancelled.
+echo     if "%LANG%"=="ko" echo 작업이 취소되었습니다.
+echo     if not "%LANG%"=="ko" echo Operation cancelled.
 echo     echo.
 echo ^)
 

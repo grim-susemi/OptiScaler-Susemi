@@ -1,0 +1,8 @@
+{
+ "schema": 1,
+ "language": "ko",
+ "locale": "ko-KR",
+ "entries": {
+  "Line one\nLine two": "줄 하나\n줄 둘\n줄 셋"
+ }
+}

@@ -1,0 +1,14 @@
+{
+ "candidates": [
+  {
+   "msgid": "Apply Changes",
+   "classes": [
+    "Button"
+   ],
+   "sites": [
+    "fixture"
+   ],
+   "occurrences": 1
+  }
+ ]
+}

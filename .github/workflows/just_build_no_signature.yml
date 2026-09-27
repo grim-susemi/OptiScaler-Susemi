@@ -7,8 +7,8 @@ name: Build (No Signing)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "dlss-neural-rendering" ]
+#  push:
+#    branches: [ "master" ]
 #  pull_request:
 #    branches: [ "master" ]
     
@@ -68,19 +68,8 @@ jobs:
         $hotfixVersion = Get-Version-Component 'VER_HOTFIX_VERSION' '#define VER_HOTFIX_VERSION\s+'
         $buildVersion = Get-Version-Component 'VER_BUILD_NUMBER' '#define VER_BUILD_NUMBER\s+'
         
-        # Release flavour and fork tag, so the archive name matches VER_PRODUCT_VERSION_STR.
-        # Anchoring on #define skips the #ifdef and #ifndef lines that carry the same names.
-        $resourceLines = Get-Content $resourceFile
-        $devRelease = $resourceLines | Select-String -Pattern '^\s*#define\s+VER_DEV_RELEASE' -Quiet
-        $forkLine = $resourceLines | Select-String -Pattern '^\s*#define\s+VER_FORK_TAG' | Select-Object -First 1
-
-        $forkTag = ''
-        if ($forkLine) { $forkTag = ($forkLine.Line -replace '.*"(.*)".*', '$1') }
-
-        if ($devRelease) { $suffix = "-dev" } else { $suffix = "-pre$buildVersion" }
-
         # Merge into a single version string
-        $version = "v$majorVersion.$minorVersion.$hotfixVersion$suffix$forkTag"
+        $version = "v$majorVersion.$minorVersion.$hotfixVersion-pre$buildVersion"
         
         # Get the current date in a specific format (e.g., YYYYMMDD)
         $date = Get-Date -Format "yyyyMMdd"
@@ -111,50 +100,17 @@ jobs:
       # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
       run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} ${{env.SOLUTION_FILE_PATH}} /verbosity:minimal
       
-    # Into the build output, so the glob below picks it up with everything else.
-    - name: Add the readme
-      run: Copy-Item ${{ github.workspace }}\dist\README.md ${{ github.workspace }}\x64\Release\a\README.md
-
-    # Cut before the redistributables land, so this archive carries the loader alone.
-    - name: Compress the artifact
+    - name: Compress the artifact 
       run: |
         $zipName = "${{ steps.get_version.outputs.filename }}.7z"
         7z a -r ${{ github.workspace }}\$zipName ${{ github.workspace }}\x64\Release\a\*.*
 
       continue-on-error: false
-
+        
     - uses: actions/upload-artifact@v7.0.0
       with:
         name: '${{ steps.get_version.outputs.filename }}'
         path: '${{ github.workspace }}\${{ steps.get_version.outputs.filename }}.7z'
-        archive: false
-        compression-level: 0
-        if-no-files-found: error
-
-    # Streamline 2.14. A game carrying an older set stops at 2X whatever the ini asks for, and the
-    # recovery step in the readme is to copy these over the ones it ships.
-    - name: Add Streamline
-      run: |
-        $target = "${{ github.workspace }}\x64\Release\a\OptiScaler\streamline"
-        New-Item -ItemType Directory -Force -Path $target | Out-Null
-        Copy-Item ${{ github.workspace }}\dist\streamline\* $target
-
-    # DLSS 310.9 snippets. OptiScaler searches its own folder ahead of the exe folder, so these
-    # are picked up without touching what the game ships. nvngx_dlssnr.dll is not among them.
-    - name: Add NGX snippets
-      run: Copy-Item ${{ github.workspace }}\dist\nvngx\* ${{ github.workspace }}\x64\Release\a\OptiScaler\
-
-    - name: Compress the artifact with the redistributables
-      run: |
-        $zipName = "${{ steps.get_version.outputs.filename }}_with_DLSS.7z"
-        7z a -r ${{ github.workspace }}\$zipName ${{ github.workspace }}\x64\Release\a\*.*
-
-      continue-on-error: false
-
-    - uses: actions/upload-artifact@v7.0.0
-      with:
-        name: '${{ steps.get_version.outputs.filename }}_with_DLSS'
-        path: '${{ github.workspace }}\${{ steps.get_version.outputs.filename }}_with_DLSS.7z'
         archive: false
         compression-level: 0
         if-no-files-found: error

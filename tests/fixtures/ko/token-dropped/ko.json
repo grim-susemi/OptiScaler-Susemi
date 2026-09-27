@@ -1,0 +1,8 @@
+{
+ "schema": 1,
+ "language": "ko",
+ "locale": "ko-KR",
+ "entries": {
+  "Apply %s to %d textures": "모든 텍스처에 %s 적용"
+ }
+}

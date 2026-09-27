@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -250,8 +250,8 @@ move $(SolutionDir)x64\Release\$(TargetFileName) $(SolutionDir)x64\Release\a\
 md $(SolutionDir)x64\Release\a\Licenses
 del /Q $(SolutionDir)x64\Release\a\Licenses\*.*
 copy $(SolutionDir)external\xess\LICENSE.txt $(SolutionDir)x64\Release\a\Licenses\XeSS_LICENSE.txt /Y
-copy "$(SolutionDir)READ ME - DLSS Neural Rendering.txt" $(SolutionDir)x64\Release\a\ /Y
 copy "$(SolutionDir)Licenses\RenoDX_ATTRIBUTION.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
+copy "$(SolutionDir)Licenses\MFGUnlock_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
 md $(SolutionDir)x64\Release\a\OptiScaler
 copy $(SolutionDir)external\xess\bin\*.dll $(SolutionDir)x64\Release\a\OptiScaler\ /Y
 copy $(SolutionDir)external\FidelityFX-SDK\docs\license.md $(SolutionDir)x64\Release\a\OptiScaler\Licenses\FidelityFX_v1_LICENSE.md /Y
@@ -269,7 +269,7 @@ copy "$(SolutionDir)external\directx_agility_sdk\LICENSE.txt" $(SolutionDir)x64\
 copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y</Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -Command "Start-Sleep -Milliseconds 1500; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; Set-Content -Path '$(ProjectDir)resource_build_date.h' -Value ('#define VER_BUILD_DATE \"' + $date + '\"') -Force; Set-Content -Path '$(ProjectDir)resource_build_commit.h' -Value ('#define VER_BUILD_COMMIT \"' + $commit + '\"') -Force;"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git -C '$(SolutionDir)' rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; function Write-Retry([string]$path, [string]$value) { for ($i = 0; $i -lt 30; $i++) { try { [System.IO.File]::WriteAllText($path, $value + [Environment]::NewLine, [System.Text.Encoding]::ASCII); return } catch [System.IO.IOException] { if ($i -eq 29) { throw }; Start-Sleep -Milliseconds 100 } } }; Write-Retry '$(ProjectDir)resource_build_date.h' ('#define VER_BUILD_DATE \"' + $date + '\"'); Write-Retry '$(ProjectDir)resource_build_commit.h' ('#define VER_BUILD_COMMIT \"' + $commit + '\"');"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseDebug|x64'">
@@ -301,9 +301,31 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
       <Command>powershell -Command "$timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'; $fileName = '$(OutDir)OptiScaler_' + $timestamp + '.7z'; $backupFileName = '$(OutDir)OptiScaler_' + $timestamp + '_Backup.7z'; &amp; '7z.exe' a -t7z $fileName '$(TargetPath)'; &amp; '7z.exe' a -t7z $backupFileName '$(OutDir)$(TargetName).*'"</Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -Command "Start-Sleep -Milliseconds 1500; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; Set-Content -Path '$(ProjectDir)resource_build_date.h' -Value ('#define VER_BUILD_DATE \"' + $date + '\"') -Force; Set-Content -Path '$(ProjectDir)resource_build_commit.h' -Value ('#define VER_BUILD_COMMIT \"' + $commit + '\"') -Force;"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git -C '$(SolutionDir)' rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; function Write-Retry([string]$path, [string]$value) { for ($i = 0; $i -lt 30; $i++) { try { [System.IO.File]::WriteAllText($path, $value + [Environment]::NewLine, [System.Text.Encoding]::ASCII); return } catch [System.IO.IOException] { if ($i -eq 29) { throw }; Start-Sleep -Milliseconds 100 } } }; Write-Retry '$(ProjectDir)resource_build_date.h' ('#define VER_BUILD_DATE \"' + $date + '\"'); Write-Retry '$(ProjectDir)resource_build_commit.h' ('#define VER_BUILD_COMMIT \"' + $commit + '\"');"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
+  <PropertyGroup>
+    <OptiScalerRtx40Mfg Condition="'$(OptiScalerRtx40Mfg)'==''">false</OptiScalerRtx40Mfg>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(OptiScalerRtx40Mfg)'=='true'">
+    <OutDir>$(SolutionDir)$(Platform)\$(Configuration)-RTX40-MFG\</OutDir>
+    <IntDir>$(Platform)\$(Configuration)-RTX40-MFG\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(OptiScalerRtx40Mfg)'=='true'">
+    <ClCompile>
+      <PreprocessorDefinitions>OPTISCALER_RTX40_MFG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <Target Name="ValidateRtx40MfgFlag" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(OptiScalerRtx40Mfg)'!='true' and '$(OptiScalerRtx40Mfg)'!='false'"
+           Text="OptiScalerRtx40Mfg must be true or false." />
+  </Target>
+  <ItemGroup>
+    <ClCompile Include="dlssnr\DlssNr_CompatibilityRuntime.cpp" />
+    <ClCompile Include="dlssnr\DlssNr_CompatibilityRuntimePaths.cpp" />
+    <ClInclude Include="dlssnr\DlssNr_CompatibilityRuntime.h" />
+    <ClInclude Include="dlssnr\DlssNr_RuntimeImports.h" />
+  </ItemGroup>
   <ItemGroup>
     <ClInclude Include="framegen\nvngx\Nvngx_Combo.h" />
     <ClInclude Include="fsr4\FSR4Upgrade.h" />
@@ -311,6 +333,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="gpu_time\GpuTime_Dx12.h" />
     <ClInclude Include="hooks\Amdxc64_Hooks.h" />
     <ClInclude Include="DllNames.h" />
+    <ClInclude Include="BuildInfo.h" />
     <ClInclude Include="exports\d3d12.h" />
     <ClInclude Include="exports\dbghelp.h" />
     <ClInclude Include="exports\dxgi.h" />
@@ -321,7 +344,18 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="exports\wininet.h" />
     <ClInclude Include="exports\winmm.h" />
     <ClInclude Include="framegen\dlssg\DLSSG_Dx12.h" />
+    <ClInclude Include="dlssnr\DlssNr_Exposure.h" />
+    <ClInclude Include="gpu_time\Vitals.h" />
     <ClInclude Include="framegen\dlssg\MfgUnlock.h" />
+    <ClInclude Include="framegen\dlssg\Kcd2Hdr.h" />
+    <ClInclude Include="framegen\dlssg\MfgUnlockFlip.h" />
+    <ClInclude Include="framegen\dlssg\MfgUnlockMethod.h" />
+    <ClInclude Include="framegen\dlssg\MfgUnlockPlugin.h" />
+    <ClInclude Include="framegen\dlssg\MfgUnlockProvider.h" />
+    <ClInclude Include="framegen\dlssg\MfgUnlockPtx.h" />
+    <ClInclude Include="framegen\dlssg\AmpereMfgLoader.h" />
+    <ClInclude Include="dlssnr\PassProfiles.h" />
+    <ClInclude Include="dlssnr\DlssNr_ModelParameters.h" />
     <ClInclude Include="framegen\ffx\FSRFG_Dx12.h" />
     <ClInclude Include="framegen\IFGFeature.h" />
     <ClInclude Include="framegen\IFGFeature_Dx12.h" />
@@ -329,6 +363,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="fsr4\FSR4ModelSelection.h" />
     <ClInclude Include="hooks\D3D12_Hooks.h" />
     <ClInclude Include="hooks\DxgiFactory_Hooks.h" />
+    <ClInclude Include="hooks\DxgiSwapchainSizing.h" />
     <ClInclude Include="hooks\DxgiFactory_WrappedCalls.h" />
     <ClInclude Include="hooks\Dxgi_Hooks.h" />
     <ClInclude Include="hooks\FG_Hooks.h" />
@@ -336,6 +371,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="hooks\LibraryLoad_Hooks.h" />
     <ClInclude Include="hooks\CommandBuffer_StateTracker.h" />
     <ClInclude Include="framegen\nvngx\IFGNvngx.h" />
+    <ClInclude Include="shaders\hud_copy\HudCopy_Vk.h" />
     <ClInclude Include="inputs\FG\Streamline_Inputs_Sl1_Dx12.h" />
     <ClInclude Include="include\device_info\device_info.hpp" />
     <ClInclude Include="inputs\FG\Upscaler_Inputs_Dx11wDx12.h" />
@@ -343,6 +379,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="low_latency\input\input_reflex.h" />
     <ClInclude Include="low_latency\input\input_xell.h" />
     <ClInclude Include="low_latency\input\input_antilag2.h" />
+    <ClInclude Include="shaders\hud_copy\precompile\HudCopy_Shader_Vk.h" />
     <ClInclude Include="shaders\magnifier\Magnifier_Dx11.h" />
     <ClInclude Include="menu\input\input_system.h" />
     <ClInclude Include="menu\input\input_system_internal.h" />
@@ -422,7 +459,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="shaders\rcas\RCAS_Vk.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_Vk.h" />
     <ClInclude Include="dlssnr\DlssNrFeature_Vk.h" />
-    <ClInclude Include="dlssnr\DlssNr_ExposureScan.h" />
+    <ClInclude Include="dlssnr\DlssNrFinished_Vk.h" />
     <ClInclude Include="shaders\render_ui\precompile\render_ui_pm_PShader.h" />
     <ClInclude Include="shaders\render_ui\precompile\render_ui_pm_VShader.h" />
     <ClInclude Include="shaders\render_ui\precompile\render_ui_PShader.h" />
@@ -443,6 +480,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="upscaler_time\UpscalerTime_Vk.h" />
     <ClInclude Include="SysUtils.h" />
     <ClInclude Include="with_dx12\dx11_with_dx12.h" />
+    <ClInclude Include="dlssnr\DlssNr_FinishedPictureBridge_Dx11.h" />
     <ClInclude Include="with_dx12\with_dx12.h" />
     <ClInclude Include="with_dx12\dx11_with_dx12_sc.h" />
     <ClInclude Include="misc\HiddenWindow.h" />
@@ -458,6 +496,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="hooks\Ntdll_Hooks.h" />
     <ClInclude Include="hooks\Streamline_Hooks.h" />
     <ClInclude Include="hooks\Wintrust_Hooks.h" />
+    <ClInclude Include="hudfix\Hudfix_Dx11.h" />
     <ClInclude Include="hudfix\Hudfix_Dx12.h" />
     <ClInclude Include="include\imgui\imgui_impl_dx11.h" />
     <ClInclude Include="include\imgui\imgui_impl_dx12.h" />
@@ -486,8 +525,11 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="proxies\Kernel32_Proxy.h" />
     <ClInclude Include="proxies\KernelBase_Proxy.h" />
     <ClInclude Include="proxies\XeFG_Proxy.h" />
+    <ClInclude Include="proxies\XeFGPacing.h" />
+    <ClInclude Include="proxies\XeFGUnlock.h" />
     <ClInclude Include="proxies\XeLL_Proxy.h" />
     <ClInclude Include="proxies\Ntdll_Proxy.h" />
+    <ClInclude Include="resource_tracking\ResTrack_dx11.h" />
     <ClInclude Include="resource_tracking\ResTrack_dx12.h" />
     <ClInclude Include="shaders\hudless_compare\HC_Common.h" />
     <ClInclude Include="shaders\hudless_compare\HC_Dx12.h" />
@@ -555,6 +597,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="detours\detours.h" />
     <ClInclude Include="dllmain.h" />
     <ClInclude Include="menu\menu_dx_base.h" />
+    <ClInclude Include="menu\Localization.h" />
     <ClInclude Include="menu\menu_common.h" />
     <ClInclude Include="menu\menu_dx11.h" />
     <ClInclude Include="menu\menu_dx12.h" />
@@ -612,7 +655,13 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="gpu_time\GpuTime_Dx12.cpp" />
     <ClCompile Include="hooks\Amdxc64_Hooks.cpp" />
     <ClCompile Include="framegen\dlssg\DLSSG_Dx12.cpp" />
-    <ClCompile Include="framegen\dlssg\MfgUnlock.cpp" />
+    <ClCompile Include="framegen\dlssg\Kcd2Hdr.cpp" />
+    <ClCompile Include="framegen\dlssg\MfgUnlock.cpp">
+      <ExcludedFromBuild Condition="'$(OptiScalerRtx40Mfg)'!='true'">true</ExcludedFromBuild>
+    </ClCompile>
+    <ClCompile Include="framegen\dlssg\AmpereMfgLoader.cpp">
+      <ExcludedFromBuild Condition="'$(OptiScalerRtx40Mfg)'!='true'">true</ExcludedFromBuild>
+    </ClCompile>
     <ClCompile Include="framegen\ffx\FSRFG_Dx12.cpp" />
     <ClCompile Include="framegen\IFGFeature.cpp" />
     <ClCompile Include="framegen\IFGFeature_Dx12.cpp" />
@@ -627,6 +676,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="hooks\LibraryLoad_Hooks.cpp" />
     <ClCompile Include="hooks\VulkanwDx12_Hooks.cpp" />
     <ClCompile Include="hooks\Xell_Hooks.cpp" />
+    <ClCompile Include="shaders\hud_copy\HudCopy_Vk.cpp" />
     <ClCompile Include="inputs\FG\Streamline_Inputs_Sl1_Dx12.cpp" />
     <ClCompile Include="include\device_info\device_info.cpp" />
     <ClCompile Include="inputs\FG\Upscaler_Inputs_Dx11wDx12.cpp" />
@@ -706,6 +756,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="inputs\FG\Streamline_Inputs_Dx12.cpp" />
     <ClCompile Include="framegen\xefg\XeFG_Dx12.cpp" />
     <ClCompile Include="hooks\Streamline_Hooks.cpp" />
+    <ClCompile Include="hudfix\Hudfix_Dx11.cpp" />
     <ClCompile Include="hudfix\Hudfix_Dx12.cpp" />
     <ClCompile Include="include\imgui\imgui_impl_dx11.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
@@ -750,6 +801,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="nvapi\NvApiHooks.cpp" />
     <ClCompile Include="nvapi\NvApiTypes.cpp" />
     <ClCompile Include="hooks\Reflex_Hooks.cpp" />
+    <ClCompile Include="resource_tracking\ResTrack_dx11.cpp" />
     <ClCompile Include="resource_tracking\ResTrack_dx12.cpp" />
     <ClCompile Include="shaders\hudless_compare\HC_Dx12.cpp" />
     <ClCompile Include="shaders\resource_flip\RF_Dx12.cpp" />
@@ -794,6 +846,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="hooks\D3D11_Hooks.cpp" />
     <ClCompile Include="hooks\Vulkan_Hooks.cpp" />
     <ClCompile Include="menu\menu_common.cpp" />
+    <ClCompile Include="menu\Localization.cpp" />
     <ClCompile Include="menu\menu_dx_base.cpp" />
     <ClCompile Include="menu\menu_dx11.cpp" />
     <ClCompile Include="menu\menu_dx12.cpp" />
@@ -830,12 +883,14 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="inputs\NVNGX.cpp" />
     <ClCompile Include="inputs\NVNGX_DLSS_Dx11.cpp" />
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_ActiveColor.h" />
     <ClCompile Include="shaders\dlssnr\DlssNr_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNrFeature_Vk.cpp" />
-    <ClCompile Include="dlssnr\DlssNr_ExposureScan.cpp" />
+    <ClCompile Include="dlssnr\DlssNrFinished_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNr_Proxy.cpp" />
     <ClCompile Include="dlssnr\DlssNr_Menu.cpp" />
     <ClCompile Include="inputs\NVNGX_DLSS_Dx12.cpp" />
+    <ClCompile Include="BuildInfo.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="inputs\NVNGX_DLSS_Vk.cpp" />
     <ClCompile Include="upscalers\xess\XeSSFeature.cpp" />
@@ -859,7 +914,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="inputs\XeSS_Dx12.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="OptiScaler.rc" />
+    <ResourceCompile Include="OptiScaler.rc">
+      <PreprocessorDefinitions>OPTISCALER_BUILD_METADATA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\magnifier\precompile\Magnifier_Shader_Vk.spv" />
@@ -868,4 +925,81 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <ItemGroup>
+    <ClInclude Include="dlssnr\DlssNr_Status.h" />
+    <ClInclude Include="dlssnr\DlssNr_Proxy.h" />
+    <ClInclude Include="dlssnr\DlssNr_PipelineUi.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_Dx12.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_Common.h" />
+    <ClInclude Include="upscalers\ShaderPipeline_Dx12.h" />
+    <ClInclude Include="upscalers\ShaderPipeline_Vk.h" />
+    <ClInclude Include="dlssnr\DlssNrPipeline_Vk.h" />
+    <ClCompile Include="dlssnr\DlssNr_Status.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="dlssnr\DlssNr.h" />
+    <ClInclude Include="dlssnr\DlssNr_Capture.h" />
+    <ClInclude Include="dlssnr\DlssNr_Readback.h" />
+    <ClInclude Include="dlssnr\DlssNr_Image_Vk.h" />
+    <ClInclude Include="dlssnr\DlssNr_PipelineCapture.h" />
+    <ClCompile Include="dlssnr\DlssNr_GpuLifetime.cpp" />
+    <ClInclude Include="dlssnr\DlssNr_GpuLifetime.h" />
+    <ClCompile Include="dlssnr\DlssNr_XeFGHandoff.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='ReleaseDebug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClInclude Include="dlssnr\DlssNr_XeFGHandoff.h" />
+    <ClInclude Include="dlssnr\DlssNr_FinishedConsumer.h" />
+    <ClInclude Include="dlssnr\DlssNr_HoldParameters_Dx12.h" />
+    <ClCompile Include="dlssnr\DlssNr_MenuControls.cpp" />
+    <ClCompile Include="dlssnr\DlssNr_MenuOverlay.cpp" />
+    <ClInclude Include="dlssnr\DlssNr_MenuOverlay.h" />
+    <ClInclude Include="dlssnr\DlssNr_MenuSections.h" />
+    <ClCompile Include="dlssnr\DlssNr_Pipeline_Dx12.cpp" />
+    <ClInclude Include="dlssnr\DlssNr_Pipeline_Dx12.h" />
+    <ClInclude Include="dlssnr\DlssNr_Upscaler.h" />
+    <ClInclude Include="dlssnr\DlssNr_VkExtensions.h" />
+    <ClInclude Include="dlssnr\DlssNrFeature_Dx12.h" />
+    <ClInclude Include="dlssnr\DlssNrFeature_Vk_Internal.h" />
+    <ClCompile Include="dlssnr\DlssNrFeature_Vk_Model.cpp" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_GpuTime.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_Guides.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_SeamClock.h" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Upscaler_Dx12.cpp" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_Upscaler_Dx12.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_DeferredSr.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Enlarge.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_FinishedCompose.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_FinishedQueue.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Hold.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Late.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Resources.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Run.cpp" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_Dx12_State.h" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Status.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Models.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="dlssnr\DlssNr_Placement.h" />
+    <ClInclude Include="dlssnr\DlssNr_FinishedReady.h" />
+    <ClInclude Include="dlssnr\DlssNr_StreamlinePicture.h" />
+    <ClCompile Include="dlssnr\DlssNr_StreamlinePicture.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="dlssnr\DlssNr_NgxDiagnostics.cpp" />
+    <ClInclude Include="dlssnr\DlssNr_NgxDiagnostics.h" />
+    <ClCompile Include="dlssnr\DlssNrFeature_Vk_Resources.cpp" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_ResidualPair.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_LateSlot.h" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Evaluate.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Encode.cpp" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_Dx12_ModelState.h" />
+  </ItemGroup>
 </Project>

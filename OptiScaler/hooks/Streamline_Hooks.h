@@ -140,13 +140,9 @@ class StreamlineHooks
 
     static void updateForceReflex();
     static void updateDlssgOptions();
+    static void applyMenuDlssgInterlock(sl::DLSSGOptions& options, bool potentiallyActive);
 
-    // MenuOverlayVk submits on a queue it picks itself, into the present path DLSS-G's pacer owns;
-    // the two cannot run together. Forces options.mode to eOff while the menu is up. Applies to every
-    // DLSS-G option push, including the ones OptiScaler makes through StreamlineProxy.
-    static void applyMenuDlssgInterlock(sl::DLSSGOptions& options, bool dlssgPotentiallyActive);
-
-    static void unhookInterposer();
+    static bool unhookInterposer();
     static void hookInterposer(HMODULE slInterposer);
 
     static void unhookDlss();

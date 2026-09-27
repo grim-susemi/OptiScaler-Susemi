@@ -12,13 +12,15 @@
 
 #include <with_dx12/with_dx12.h>
 #include "FG/Upscaler_Inputs_Dx11wDx12.h"
+#include <hudfix/Hudfix_Dx11.h>
 
 #include <ankerl/unordered_dense.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <misc/IdentifyGpu.h>
 
 static ID3D11Device* D3D11Device = nullptr;
-static ankerl::unordered_dense::map<unsigned int, ContextData<IFeature_Dx11>> Dx11Contexts;
+// Leftover bridge/GPU owners must not run destructors under the loader lock.
+static auto& Dx11Contexts = *new ankerl::unordered_dense::map<unsigned int, ContextData<IFeature_Dx11>>;
 static int evalCounter = 0;
 static bool shutdown = false;
 static bool _skipInit = false;
@@ -322,18 +324,14 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_Init_with_ProjectID(
 
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_Shutdown()
 {
+    if (State::Instance().isShuttingDown)
+        return NVSDK_NGX_Result_Success;
     shutdown = true;
 
-    // for (auto const& [key, val] : Dx11Contexts)
-    //{
-    //     if (val.feature)
-    //         NVSDK_NGX_D3D11_ReleaseFeature(val.feature->Handle());
-    // }
-
-    // Dx11Contexts.clear();
-
-    D3D11Device = nullptr;
     State::Instance().currentFeature = nullptr;
+    // DX11-on-DX12 features own their NR shaders through the shared DX12 feature.
+    Dx11Contexts.clear();
+    D3D11Device = nullptr;
 
     if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::IsDx11Inited() &&
         NVNGXProxy::D3D11_Shutdown() != nullptr)
@@ -349,6 +347,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_Shutdown()
     shutdown = false;
     State::Instance().nvngxDx11Inited = false;
 
+    UpscalerInputsDx11wDx12::Reset();
     Dx11WithDx12::ResetUpscalerResourceCache(true);
 
     return NVSDK_NGX_Result_Success;
@@ -356,7 +355,11 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_Shutdown()
 
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_Shutdown1(ID3D11Device* InDevice)
 {
+    if (State::Instance().isShuttingDown)
+        return NVSDK_NGX_Result_Success;
     shutdown = true;
+    State::Instance().currentFeature = nullptr;
+    Dx11Contexts.clear();
 
     if (Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::IsDx11Inited() &&
         NVNGXProxy::D3D11_Shutdown1() != nullptr)
@@ -497,7 +500,11 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_DestroyParameters(NVSDK_NGX_Param
     if (InParameters == nullptr)
         return NVSDK_NGX_Result_Fail;
 
+    const bool isUsingDlss = Config::Instance()->DLSSEnabled.value_or_default() && NVNGXProxy::NVNGXModule();
     const bool success = TryDestroyNGXParameters(InParameters, NVNGXProxy::D3D11_DestroyParameters());
+
+    if (isUsingDlss)
+        UpscalerInputsDx11wDx12::Reset();
 
     return success ? NVSDK_NGX_Result_Success : NVSDK_NGX_Result_Fail;
 }
@@ -597,6 +604,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_CreateFeature(ID3D11DeviceContext
     if (deviceContext->ModuleLoaded() && deviceContext->Init(D3D11Device, InDevCtx, InParameters))
     {
         State::Instance().currentFeature = deviceContext;
+        UpscalerInputsDx11wDx12::Reset();
         return NVSDK_NGX_Result_Success;
     }
 
@@ -610,6 +618,8 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_CreateFeature(ID3D11DeviceContext
 
 NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_ReleaseFeature(NVSDK_NGX_Handle* InHandle)
 {
+    if (State::Instance().isShuttingDown)
+        return NVSDK_NGX_Result_Success;
     if (!InHandle)
         return NVSDK_NGX_Result_Success;
 
@@ -629,6 +639,14 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_ReleaseFeature(NVSDK_NGX_Handle* 
         {
             return NVSDK_NGX_Result_FAIL_FeatureNotFound;
         }
+    }
+
+    if (State::Instance().currentFG != nullptr && State::Instance().activeFgInput == FGInput::Upscaler)
+    {
+        State::Instance().fgChanged = true;
+        State::Instance().currentFG->DestroyFGContext();
+        State::Instance().clearCapturedHudlesses = true;
+        UpscalerInputsDx11wDx12::Reset();
     }
 
     if (!shutdown)
@@ -745,6 +763,8 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_EvaluateFeature(ID3D11DeviceConte
 
     if (state.changeBackend[handleId])
     {
+        UpscalerInputsDx11wDx12::Reset();
+
         auto successfulPhase = FeatureProvider_Dx11::ChangeFeature(state.newBackend, D3D11Device, InDevCtx, handleId,
                                                                    InParameters, activeContext);
 
@@ -780,6 +800,12 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_EvaluateFeature(ID3D11DeviceConte
         return NVSDK_NGX_Result_Success;
     }
 
+    const bool suppressDx11HudfixTracking = state.activeFgInput == FGInput::Upscaler &&
+                                            Config::Instance()->FGHUDFix.value_or_default() &&
+                                            state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
+    if (suppressDx11HudfixTracking)
+        Hudfix_Dx11::SetSkipStatus(true);
+
     auto upscaleResult = deviceContext->Evaluate(InDevCtx, InParameters);
 
     if (State::Instance().activeFgInput == FGInput::Upscaler)
@@ -795,6 +821,9 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D11_EvaluateFeature(ID3D11DeviceConte
             UpscalerInputsDx11wDx12::UpscaleEnd(InParameters, deviceContext);
         }
     }
+
+    if (suppressDx11HudfixTracking)
+        Hudfix_Dx11::SetSkipStatus(false);
 
     auto upscaler = deviceContext->GetUpscalerType();
     if (!upscaleResult && !deviceContext->IsInited() &&

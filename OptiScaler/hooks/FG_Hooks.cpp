@@ -1,4 +1,5 @@
 #include "pch.h"
+#include <dlssnr/DlssNr.h>
 #include "FG_Hooks.h"
 #include <Config.h>
 
@@ -34,6 +35,41 @@ static HANDLE _semaphore = nullptr;
 #if (XEFG_RESOURCE_REF_LIMIT == 0)
 inline static std::vector<void*> oldBackBuffers;
 #endif
+
+static bool WaitForQueueIdle(ID3D12CommandQueue* queue, ID3D12Fence* fence, HANDLE fenceEvent, UINT64& fenceValue)
+{
+    if (queue == nullptr || fence == nullptr || fenceEvent == nullptr)
+        return true;
+
+    const UINT64 waitValue = ++fenceValue;
+    auto result = queue->Signal(fence, waitValue);
+    if (FAILED(result))
+    {
+        LOG_ERROR("FG/present queue idle Signal failed: {:X}", (UINT) result);
+        return false;
+    }
+
+    if (fence->GetCompletedValue() >= waitValue)
+        return true;
+
+    result = fence->SetEventOnCompletion(waitValue, fenceEvent);
+    if (FAILED(result))
+    {
+        LOG_ERROR("FG/present queue idle SetEventOnCompletion failed. fence {}, completed {}, result {:X}", waitValue,
+                  fence->GetCompletedValue(), (UINT) result);
+        return false;
+    }
+
+    const auto waitResult = WaitForSingleObject(fenceEvent, 5000);
+    if (waitResult != WAIT_OBJECT_0)
+    {
+        LOG_ERROR("FG/present queue idle wait failed. fence {}, completed {}, waitResult {:X}", waitValue,
+                  fence->GetCompletedValue(), waitResult);
+        return false;
+    }
+
+    return true;
+}
 
 static bool CheckForFGStatus()
 {
@@ -157,18 +193,13 @@ HRESULT FGHooks::CreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI
             if (State::Instance().currentCommandQueue != nullptr && resizeFence != nullptr &&
                 resizeFenceEvent != nullptr)
             {
-                LOG_DEBUG("Waiting for GPU to finish before resizing buffers");
+                LOG_DEBUG("Waiting for GPU to finish");
 
                 resizeFenceValue++;
-                State::Instance().currentCommandQueue->Signal(resizeFence, resizeFenceValue);
+                const auto waitResult = WaitForQueueIdle(State::Instance().currentCommandQueue, resizeFence,
+                                                         resizeFenceEvent, resizeFenceValue);
 
-                if (resizeFence->GetCompletedValue() < resizeFenceValue)
-                {
-                    resizeFence->SetEventOnCompletion(resizeFenceValue, resizeFenceEvent);
-                    // Max 5 sec
-                    auto waitResult = WaitForSingleObject(resizeFenceEvent, 5000);
-                    LOG_DEBUG("WaitForSingleObject result: {:X}", waitResult);
-                }
+                LOG_DEBUG("WaitForSingleObject result: {}", waitResult);
             }
 
             oldSwapChain = State::Instance().currentFGSwapchain;
@@ -269,18 +300,13 @@ HRESULT FGHooks::CreateSwapChainForHwnd(IDXGIFactory* pFactory, IUnknown* pDevic
             if (State::Instance().currentCommandQueue != nullptr && resizeFence != nullptr &&
                 resizeFenceEvent != nullptr)
             {
-                LOG_DEBUG("Waiting for GPU to finish before resizing buffers");
+                LOG_DEBUG("Waiting for GPU to finish");
 
                 resizeFenceValue++;
-                State::Instance().currentCommandQueue->Signal(resizeFence, resizeFenceValue);
+                const auto waitResult = WaitForQueueIdle(State::Instance().currentCommandQueue, resizeFence,
+                                                         resizeFenceEvent, resizeFenceValue);
 
-                if (resizeFence->GetCompletedValue() < resizeFenceValue)
-                {
-                    resizeFence->SetEventOnCompletion(resizeFenceValue, resizeFenceEvent);
-                    // Max 5 sec
-                    auto waitResult = WaitForSingleObject(resizeFenceEvent, 5000);
-                    LOG_DEBUG("WaitForSingleObject result: {:X}", waitResult);
-                }
+                LOG_DEBUG("WaitForSingleObject result: {}", waitResult);
             }
 
             oldSwapChain = State::Instance().currentFGSwapchain;
@@ -317,6 +343,10 @@ void FGHooks::SetFGSwapchain(IDXGISwapChain* pSwapChain, HWND hWnd)
         return;
 
     _hwnd = hWnd;
+
+    // A new app-facing proxy does not inherit the recorded colour-space request.
+    if (pSwapChain != State::Instance().currentFGSwapchain)
+        ResetFGColorSpaceCarrier();
 
     if (_dx12InteropPresentSC == pSwapChain)
     {
@@ -373,6 +403,9 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
     o_FGSCGetFullscreenDesc = (PFN_GetFullscreenDesc) pFactoryVTable[19];
     o_FGSCPresent1 = (PFN_Present1) pFactoryVTable[22];
     o_FGSCGetFrameLatencyWaitableObject = (PFN_GetFrameLatencyWaitableObject) pFactoryVTable[33];
+    // IDXGISwapChain3: [36] GetCurrentBackBufferIndex, [37] CheckColorSpaceSupport, [38] SetColorSpace1,
+    // [39] ResizeBuffers1 - the [33]/[39] loads pin the numbering.
+    o_FGSCSetColorSpace1 = (PFN_SetColorSpace1) pFactoryVTable[38];
     o_FGSCResizeBuffers1 = (PFN_ResizeBuffers1) pFactoryVTable[39];
 
     if (o_FGSCPresent != nullptr)
@@ -388,6 +421,7 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
         LOG_TRACE("FGSCPresent1: {:X}", (size_t) o_FGSCPresent1);
         LOG_TRACE("FGSCResizeBuffers1: {:X}", (size_t) o_FGSCResizeBuffers1);
         LOG_TRACE("FGSCGetFrameLatencyWaitableObject: {:X}", (size_t) o_FGSCGetFrameLatencyWaitableObject);
+        LOG_TRACE("FGSCSetColorSpace1: {:X}", (size_t) o_FGSCSetColorSpace1);
 
         DetourTransactionBegin();
         DetourUpdateThread(GetCurrentThread());
@@ -412,6 +446,11 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
             if (o_FGSCGetFullscreenDesc != nullptr)
                 DetourAttach(&(PVOID&) o_FGSCGetFullscreenDesc, hkGetFullscreenDesc);
 
+            // App-facing colour-space carrier: the game's SetColorSpace1 request is recorded and forwarded
+            // exactly once (see CarrySetColorSpace1).
+            if (o_FGSCSetColorSpace1 != nullptr)
+                DetourAttach(&(PVOID&) o_FGSCSetColorSpace1, hkSetColorSpace1);
+
             if ((Config::Instance()->SimulateWaitableObject.value_or_default() ||
                  (State::Instance().gameEngine == GameEngineType::Unity &&
                   State::Instance().activeFgOutput == FGOutput::XeFG)) &&
@@ -434,6 +473,7 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
             o_FGSCGetFullscreenDesc = nullptr;
             o_FGSCPresent1 = nullptr;
             o_FGSCResizeBuffers1 = nullptr;
+            o_FGSCSetColorSpace1 = nullptr;
             o_FGSCGetFrameLatencyWaitableObject = nullptr;
         }
     }
@@ -575,6 +615,14 @@ HRESULT FGHooks::hkGetFullscreenState(IDXGISwapChain* This, BOOL* pFullscreen, I
     return result;
 }
 
+HRESULT FGHooks::hkSetColorSpace1(IDXGISwapChain3* This, DXGI_COLOR_SPACE_TYPE ColorSpace)
+{
+    // Only the registered XeFG app-facing proxy is recorded; other instances reached through the same
+    // detoured class code are still forwarded, exactly once.
+    const bool owningProxy = This != nullptr && This == State::Instance().currentFGSwapchain;
+    return CarrySetColorSpace1(This, ColorSpace, o_FGSCSetColorSpace1, owningProxy);
+}
+
 HRESULT FGHooks::hkResizeBuffers(IDXGISwapChain* This, UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat,
                                  UINT SwapChainFlags)
 {
@@ -601,15 +649,10 @@ HRESULT FGHooks::hkResizeBuffers(IDXGISwapChain* This, UINT BufferCount, UINT Wi
         LOG_DEBUG("Waiting for GPU to finish before resizing buffers");
 
         resizeFenceValue++;
-        State::Instance().currentCommandQueue->Signal(resizeFence, resizeFenceValue);
+        const auto waitResult =
+            WaitForQueueIdle(State::Instance().currentCommandQueue, resizeFence, resizeFenceEvent, resizeFenceValue);
 
-        if (resizeFence->GetCompletedValue() < resizeFenceValue)
-        {
-            resizeFence->SetEventOnCompletion(resizeFenceValue, resizeFenceEvent);
-            // Max 5 sec
-            auto waitResult = WaitForSingleObject(resizeFenceEvent, 5000);
-            LOG_DEBUG("WaitForSingleObject result: {:X}", waitResult);
-        }
+        LOG_DEBUG("WaitForSingleObject result: {}", waitResult);
     }
 
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
@@ -717,39 +760,47 @@ HRESULT FGHooks::hkResizeBuffers(IDXGISwapChain* This, UINT BufferCount, UINT Wi
         State::Instance().fgChanged = true;
         fg->UpdateTarget();
         fg->Deactivate();
+
+        // Let's try Dx11 like approach on Dx12
+        std::shared_lock<std::shared_mutex> resizeLock(_resizeMutex, std::defer_lock);
+        if (State::Instance().activeFgOutput == FGOutput::XeFG &&
+            State::Instance().swapchainInteropApi != SwapchainInteropApi::Dx11wDx12)
+        {
+            resizeLock.lock();
+        }
     }
 
     _skipResize1 = true;
 
     // Release swapchain backbuffers to prevent errors when resizing
-    if (State::Instance().activeFgOutput == FGOutput::XeFG)
-    {
-        for (UINT i = 0; i < 8; i++)
-        {
-            ID3D12Resource* backBuffer = nullptr;
-            auto bbResult = This->GetBuffer(i, IID_PPV_ARGS(&backBuffer));
-
-            if (bbResult == S_OK)
-            {
-                LOG_DEBUG("Backbuffer {}: {:X}", i, (size_t) backBuffer);
-                auto refCount = backBuffer->Release();
-                while (refCount > XEFG_RESOURCE_REF_LIMIT)
-                {
-                    LOG_DEBUG("Releasing backbuffer {}: RefCount {}", i, refCount);
-                    refCount = backBuffer->Release();
-                }
-
-#if (XEFG_RESOURCE_REF_LIMIT == 0)
-                oldBackBuffers.push_back(backBuffer);
-#endif
-            }
-            else
-            {
-                LOG_DEBUG("GetBuffer failed for index {}: {:X}", i, (UINT) bbResult);
-                break;
-            }
-        }
-    }
+    //    if (State::Instance().activeFgOutput == FGOutput::XeFG)
+    //    {
+    //        for (UINT i = 0; i < 8; i++)
+    //        {
+    //            ID3D12Resource* backBuffer = nullptr;
+    //            auto bbResult = This->GetBuffer(i, IID_PPV_ARGS(&backBuffer));
+    //
+    //            if (bbResult == S_OK)
+    //            {
+    //                LOG_DEBUG("Backbuffer {}: {:X}", i, (size_t) backBuffer);
+    //                auto refCount = backBuffer->Release();
+    //                while (refCount > XEFG_RESOURCE_REF_LIMIT)
+    //                {
+    //                    LOG_DEBUG("Releasing backbuffer {}: RefCount {}", i, refCount);
+    //                    refCount = backBuffer->Release();
+    //                }
+    //
+    // #if (XEFG_RESOURCE_REF_LIMIT == 0)
+    //                oldBackBuffers.push_back(backBuffer);
+    // #endif
+    //            }
+    //            else
+    //            {
+    //                LOG_DEBUG("GetBuffer failed for index {}: {:X}", i, (UINT) bbResult);
+    //                break;
+    //            }
+    //        }
+    //    }
 
     HRESULT result;
     {
@@ -763,6 +814,9 @@ HRESULT FGHooks::hkResizeBuffers(IDXGISwapChain* This, UINT BufferCount, UINT Wi
 
     if (result == S_OK)
     {
+        if (This == State::Instance().currentFGSwapchain)
+            InvalidateFGColorSpaceCarrierEpoch(); // rebuilt buffers: the colour space must be re-applied once
+
         if (fg != nullptr)
         {
             State::Instance().fgChanged = true;
@@ -839,15 +893,10 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
         LOG_DEBUG("Waiting for GPU to finish before resizing buffers");
 
         resizeFenceValue++;
-        State::Instance().currentCommandQueue->Signal(resizeFence, resizeFenceValue);
+        const auto waitResult =
+            WaitForQueueIdle(State::Instance().currentCommandQueue, resizeFence, resizeFenceEvent, resizeFenceValue);
 
-        if (resizeFence->GetCompletedValue() < resizeFenceValue)
-        {
-            resizeFence->SetEventOnCompletion(resizeFenceValue, resizeFenceEvent);
-            // Max 5 sec
-            auto waitResult = WaitForSingleObject(resizeFenceEvent, 5000);
-            LOG_DEBUG("WaitForSingleObject result: {:X}", waitResult);
-        }
+        LOG_DEBUG("WaitForSingleObject result: {}", waitResult);
     }
 
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
@@ -952,6 +1001,14 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
         State::Instance().fgChanged = true;
         fg->UpdateTarget();
         fg->Deactivate();
+
+        // Let's try Dx11 like approach on Dx12
+        std::shared_lock<std::shared_mutex> resizeLock(_resizeMutex, std::defer_lock);
+        if (State::Instance().activeFgOutput == FGOutput::XeFG &&
+            State::Instance().swapchainInteropApi != SwapchainInteropApi::Dx11wDx12)
+        {
+            resizeLock.lock();
+        }
     }
 
     // Release menu render targets
@@ -959,34 +1016,34 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
         MenuOverlayDx::CleanupRenderTarget(false, NULL);
 
     // Release swapchain backbuffers to prevent errors when resizing
-    if (State::Instance().activeFgOutput == FGOutput::XeFG)
-    {
-        for (UINT i = 0; i < 8; i++)
-        {
-            ID3D12Resource* backBuffer = nullptr;
-            auto bbResult = This->GetBuffer(i, IID_PPV_ARGS(&backBuffer));
-
-            if (bbResult == S_OK)
-            {
-                LOG_DEBUG("Backbuffer {}: {:X}", i, (size_t) backBuffer);
-                auto refCount = backBuffer->Release();
-                while (refCount > XEFG_RESOURCE_REF_LIMIT)
-                {
-                    LOG_DEBUG("Releasing backbuffer {}: RefCount {}", i, refCount);
-                    refCount = backBuffer->Release();
-                }
-
-#if (XEFG_RESOURCE_REF_LIMIT == 0)
-                oldBackBuffers.push_back(backBuffer);
-#endif
-            }
-            else
-            {
-                LOG_DEBUG("GetBuffer failed for index {}: {:X}", i, (UINT) bbResult);
-                break;
-            }
-        }
-    }
+    //    if (State::Instance().activeFgOutput == FGOutput::XeFG)
+    //    {
+    //        for (UINT i = 0; i < 8; i++)
+    //        {
+    //            ID3D12Resource* backBuffer = nullptr;
+    //            auto bbResult = This->GetBuffer(i, IID_PPV_ARGS(&backBuffer));
+    //
+    //            if (bbResult == S_OK)
+    //            {
+    //                LOG_DEBUG("Backbuffer {}: {:X}", i, (size_t) backBuffer);
+    //                auto refCount = backBuffer->Release();
+    //                while (refCount > XEFG_RESOURCE_REF_LIMIT)
+    //                {
+    //                    LOG_DEBUG("Releasing backbuffer {}: RefCount {}", i, refCount);
+    //                    refCount = backBuffer->Release();
+    //                }
+    //
+    // #if (XEFG_RESOURCE_REF_LIMIT == 0)
+    //                oldBackBuffers.push_back(backBuffer);
+    // #endif
+    //            }
+    //            else
+    //            {
+    //                LOG_DEBUG("GetBuffer failed for index {}: {:X}", i, (UINT) bbResult);
+    //                break;
+    //            }
+    //        }
+    //    }
 
     HRESULT result;
     {
@@ -1003,6 +1060,9 @@ HRESULT FGHooks::hkResizeBuffers1(IDXGISwapChain3* This, UINT BufferCount, UINT 
 
     if (result == S_OK)
     {
+        if (This == State::Instance().currentFGSwapchain)
+            InvalidateFGColorSpaceCarrierEpoch(); // rebuilt buffers: the colour space must be re-applied once
+
         if (fg != nullptr)
         {
             State::Instance().fgChanged = true;
@@ -1118,6 +1178,14 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
 
     if (willPresent)
     {
+        // Let's try Dx11 like approach on Dx12
+        std::shared_lock<std::shared_mutex> resizeLock(_resizeMutex, std::defer_lock);
+        if (State::Instance().activeFgOutput == FGOutput::XeFG &&
+            State::Instance().swapchainInteropApi != SwapchainInteropApi::Dx11wDx12)
+        {
+            resizeLock.lock();
+        }
+
         state.fgLastFrame++;
 
         double ftDelta = 0.0f;
@@ -1212,12 +1280,27 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         }
     }
 
+    // XeFG owns its finished-picture handoff (todo 10): the generic apply must NOT run for
+    // XeFG - it composes through State.currentCommandQueue and knows nothing of the accepted
+    // application frame. The owned handoff runs at the end of XeFG_Dx12::Present() below on
+    // the XeFG-retained application queue. Internal presents never reach FGPresent
+    // (hkFGPresent/hkFGPresent1 skip them) and DXGI_PRESENT_TEST never enters this block
+    // (willPresent), so the owning application proxy is the only present that hands off.
+    uint64_t xefgHandoffSeq = 0;
+    const bool xefgOwnedHandoff =
+        willPresent && fgFeatureActive && state.activeFgOutput == FGOutput::XeFG;
+    if (xefgOwnedHandoff)
+        xefgHandoffSeq = FGHooks::XeFGHandoffSequence();
+
     if (willPresent && fgFeatureActive)
     {
         if (state.activeFgInput == FGInput::FSRFG)
             ffxPresentCallback();
         else if (state.activeFgInput == FGInput::FSRFG30)
             FSR3FG::ffxPresentCallback();
+
+        if (!xefgOwnedHandoff)
+            DlssNr::ApplyToFinishedPicture(This, state.currentCommandQueue);
 
         fg->Present();
     }
@@ -1271,6 +1354,30 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         result = o_FGSCPresent(This, SyncInterval, Flags);
     else
         result = o_FGSCPresent1((IDXGISwapChain1*) This, SyncInterval, Flags, pPresentParameters);
+
+    // NR_XEFG_PRESENT (todo 10): after the corresponding original proxy Present, from the
+    // SDK's own status (framesPresented counts pictures submitted for presentation, not
+    // proven scanout). Only the owning application proxy, and only when the owned handoff
+    // decided this present (the sequence moved); never for a generated-frame internal
+    // present and never for DXGI_PRESENT_TEST.
+    if (xefgOwnedHandoff && This == state.currentFGSwapchain)
+    {
+        uint64_t handoffGeneration = 0;
+        uint64_t handoffFrame = 0;
+        void* handoffContext = nullptr;
+        if (FGHooks::XeFGHandoffSince(xefgHandoffSeq, handoffGeneration, handoffFrame, handoffContext) &&
+            handoffContext != nullptr && XeFGProxy::GetLastPresentStatus() != nullptr)
+        {
+            xefg_swapchain_present_status_t status {};
+            if (XeFGProxy::GetLastPresentStatus()((xefg_swapchain_handle_t) handoffContext, &status) ==
+                XEFG_SWAPCHAIN_RESULT_SUCCESS)
+            {
+                LOG_INFO("NR_XEFG_PRESENT generation={} frame={} enabled={} framegen_result={} frames_presented={}",
+                         handoffGeneration, handoffFrame, status.isFrameGenEnabled,
+                         (UINT) status.frameGenResult, status.framesPresented);
+            }
+        }
+    }
 
     if (result == S_OK)
     {
@@ -1360,18 +1467,13 @@ ULONG FGHooks::hkFGRelease(IUnknown* This)
             if (State::Instance().currentCommandQueue != nullptr && resizeFence != nullptr &&
                 resizeFenceEvent != nullptr)
             {
-                LOG_DEBUG("Waiting for GPU to finish before resizing buffers");
+                LOG_DEBUG("Waiting for GPU to finish");
 
                 resizeFenceValue++;
-                State::Instance().currentCommandQueue->Signal(resizeFence, resizeFenceValue);
+                const auto waitResult = WaitForQueueIdle(State::Instance().currentCommandQueue, resizeFence,
+                                                         resizeFenceEvent, resizeFenceValue);
 
-                if (resizeFence->GetCompletedValue() < resizeFenceValue)
-                {
-                    resizeFence->SetEventOnCompletion(resizeFenceValue, resizeFenceEvent);
-                    // Max 5 sec
-                    auto waitResult = WaitForSingleObject(resizeFenceEvent, 5000);
-                    LOG_DEBUG("WaitForSingleObject result: {:X}", waitResult);
-                }
+                LOG_DEBUG("WaitForSingleObject result: {}", waitResult);
             }
 
             DXGI_SWAP_CHAIN_DESC scDesc {};
@@ -1417,6 +1519,7 @@ ULONG FGHooks::hkFGRelease(IUnknown* This)
 
             LOG_DEBUG("FG Swapchain released, clearing currentFGSwapchain");
             State::Instance().currentFGSwapchain = nullptr;
+            ResetFGColorSpaceCarrier();
 
             if (State::Instance().currentWrappedSwapchain != nullptr &&
                 State::Instance().currentSwapchainDesc.OutputWindow == _hwnd)

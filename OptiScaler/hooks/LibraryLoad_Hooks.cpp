@@ -1,10 +1,11 @@
 #include "pch.h"
 #include "LibraryLoad_Hooks.h"
+#if defined(OPTISCALER_RTX40_MFG)
+#include <framegen/dlssg/MfgUnlock.h>
+#endif
 
 #include <Config.h>
 #include <DllNames.h>
-
-#include <framegen/dlssg/MfgUnlock.h>
 
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/Kernel32_Proxy.h>
@@ -109,22 +110,18 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
             LOG_ERROR("Trying to load dll: {}", libNameA);
     }
 
-    // nvngx_dlssg
-    //
-    // The module publishes DLSSG.MultiFrameCountMax while it initialises and slDLSSGGetState returns
-    // the published value rather than recomputing it, so the patch has to be in before anything in
-    // here runs. Patching at the first GetState is one call too late.
-    if (libName.contains(L"nvngx_dlssg"))
+    // Patch a supported Ada snippet before NGX reads and caches its capabilities. Covers the driver's OTA
+    // copy (models\dlssg\...\<hash>.bin) as well as the game's nvngx_dlssg.dll, which the .bin branch
+    // below would otherwise load without patching.
+#if defined(OPTISCALER_RTX40_MFG)
+    if (MfgUnlock::Provider::IsProviderPath(normalizedPath) && MfgUnlock::Pending())
     {
-        auto dlssgSnippet = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
-
-        if (dlssgSnippet != nullptr)
-            MfgUnlock::TryApply();
-        else
-            LOG_ERROR("Trying to load dll as nvngx_dlssg: {}", libNameA);
-
-        return dlssgSnippet;
+        auto snippet = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
+        if (snippet)
+            MfgUnlock::TryApply(snippet);
+        return snippet;
     }
+#endif
 
     // NGX OTA
     // Try to catch something like this:

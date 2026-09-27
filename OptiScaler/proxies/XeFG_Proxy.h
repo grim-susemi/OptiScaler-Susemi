@@ -4,6 +4,7 @@
 #include "Util.h"
 #include "Config.h"
 #include "Logger.h"
+#include "XeFGUnlock.h"
 
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
@@ -172,6 +173,7 @@ class XeFGProxy
             return false;
 
         _dll = libxefgModule;
+        XeFGUnlock::Apply(_dll);
 
         {
             ScopedSkipDxgiLoadChecks skipDxgiLoadChecks {};
