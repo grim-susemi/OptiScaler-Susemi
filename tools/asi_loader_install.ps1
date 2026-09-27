@@ -33,6 +33,28 @@ $licenseSource = Join-Path $PSScriptRoot 'asi-loader\LICENSE_Ultimate_ASI_Loader
 $licenseName = 'LICENSE_Ultimate_ASI_Loader.txt'
 $candidates = @('winmm.dll','dinput8.dll','version.dll','dsound.dll','dbghelp.dll','d3d12.dll','wininet.dll','winhttp.dll')
 
+function Get-FileSha256([string]$path) {
+    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+}
+
+function Get-ReceiptPath([string]$dir, [string]$name) {
+    return (Join-Path $dir ('_asi_loader_receipt_' + $name + '.json'))
+}
+
+function Write-InstallReceipt([string]$receiptPath, [string]$targetPath, [string]$name, [string]$preSha, [string]$postSha, [string]$backupDir) {
+    $receipt = [ordered]@{
+        version = 1
+        name = $name
+        target = $targetPath
+        preSha256 = $preSha
+        installedSha256 = $postSha
+        backupDir = $backupDir
+        installedUtc = (Get-Date).ToUniversalTime().ToString('o')
+        owner = 'asi_loader_install.ps1'
+    }
+    ($receipt | ConvertTo-Json) | Set-Content -LiteralPath $receiptPath -Encoding UTF8
+}
+
 function Test-Loader([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return $false }
     return ((Get-Item -LiteralPath $path).VersionInfo.OriginalFilename -eq 'Ultimate-ASI-Loader-x64.dll')
@@ -50,15 +72,19 @@ switch ($Action) {
     'install' {
         if (-not (Test-Path -LiteralPath $source)) { Fail 'Bundled loader is missing: tools\asi-loader\Ultimate-ASI-Loader-x64.dll' }
         $target = Join-Path $root $Name
+        $receiptPath = Get-ReceiptPath $root $Name
         if (Test-Loader $target) {
             Info ('The ASI loader is already installed as ' + $Name + '.')
         } else {
+            $preSha = $null
+            $backup = ''
             if (Test-Path -LiteralPath $target) {
                 if (-not $Force) {
                     Write-Host ($Name + ' already exists and is not the ASI loader.') -ForegroundColor Yellow
                     $answer = Read-Host 'Back it up and replace it? (y/N)'
-                    if ($answer -notmatch '^(?i)y') { Fail 'Aborted; nothing was changed.' }
+                    if (($null -eq $answer) -or ($answer -notmatch '^(?i)y')) { Fail 'Aborted; nothing was changed.' }
                 }
+                $preSha = Get-FileSha256 $target
                 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
                 $backup = Join-Path $root ('_asi_loader_backup_' + $stamp)
                 New-Item -ItemType Directory -Path $backup | Out-Null
@@ -66,6 +92,10 @@ switch ($Action) {
                 Info ('Backed up the existing file to ' + $backup)
             }
             Copy-Item -LiteralPath $source -Destination $target -Force
+            $postSha = Get-FileSha256 $target
+            $sourceSha = Get-FileSha256 $source
+            if ($postSha -ne $sourceSha) { Fail 'Install verification failed: installed file hash differs from the bundled loader.' }
+            Write-InstallReceipt $receiptPath $target $Name $preSha $postSha $backup
             Info ('Installed the ASI loader as ' + $Name)
         }
         if ((Test-Path -LiteralPath $licenseSource) -and -not (Test-Path -LiteralPath (Join-Path $root $licenseName))) {
@@ -79,14 +109,34 @@ switch ($Action) {
     }
     'remove' {
         $target = Join-Path $root $Name
-        if (-not (Test-Loader $target)) { Info ('No bundled ASI loader found as ' + $Name + '.'); exit 0 }
+        $receiptPath = Get-ReceiptPath $root $Name
+        $hasReceipt = Test-Path -LiteralPath $receiptPath
+        if (-not (Test-Loader $target)) {
+            if (-not $hasReceipt) { Info ('No bundled ASI loader found as ' + $Name + '.'); exit 0 }
+            Fail ('Refusing to remove ' + $Name + ': installed file was replaced or deleted after install. Nothing was changed.')
+        }
+        if (-not $hasReceipt) { Fail ('Refusing to remove ' + $Name + ': no installer receipt, so this file was not installed by this tool. Bytes preserved.') }
+        try { $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json }
+        catch { Fail ('Refusing to remove ' + $Name + ': installer receipt is unreadable. Bytes preserved.') }
+        $currentSha = Get-FileSha256 $target
+        if (($receipt.target -ne $target) -or ($receipt.installedSha256 -ne $currentSha)) { Fail ('Refusing to remove ' + $Name + ': file changed since install or was installed elsewhere. Bytes preserved.') }
         $restored = $false
-        $backups = Get-ChildItem -LiteralPath $root -Directory -Filter '_asi_loader_backup_*' -ErrorAction SilentlyContinue | Sort-Object Name -Descending
-        foreach ($b in $backups) {
-            $candidate = Join-Path $b.FullName $Name
-            if (Test-Path -LiteralPath $candidate) { Copy-Item -LiteralPath $candidate -Destination $target -Force; Info ('Restored the previous ' + $Name + ' from ' + $b.FullName); $restored = $true; break }
+        if (($null -ne $receipt.backupDir) -and ($receipt.backupDir -ne '')) {
+            $backupFile = Join-Path $receipt.backupDir $Name
+            if (Test-Path -LiteralPath $backupFile) {
+                $backupSha = Get-FileSha256 $backupFile
+                if (($null -ne $receipt.preSha256) -and ($receipt.preSha256 -ne '') -and ($backupSha -ne $receipt.preSha256)) { Fail ('Refusing to restore ' + $Name + ': backup hash differs from the pre-install receipt. Installed file left unchanged.') }
+                Copy-Item -LiteralPath $backupFile -Destination $target -Force
+                $restoredSha = Get-FileSha256 $target
+                if (($null -ne $receipt.preSha256) -and ($receipt.preSha256 -ne '') -and ($restoredSha -ne $receipt.preSha256)) { Fail ('Restore verification failed: restored file hash differs from the pre-install backup.') }
+                Info ('Restored the previous ' + $Name + ' from ' + $receipt.backupDir)
+                $restored = $true
+            } else {
+                Write-Host ('Receipt backup is gone (' + $receipt.backupDir + '); removing the loader without restore.') -ForegroundColor Yellow
+            }
         }
         if (-not $restored) { Remove-Item -LiteralPath $target -Force; Info ('Removed ' + $Name) }
+        Remove-Item -LiteralPath $receiptPath -Force
         exit 0
     }
 }

@@ -3,10 +3,11 @@ chcp 65001 >nul
 setlocal
 title ASI loader setup
 set "PS1=%~dp0tools\asi_loader_install.ps1"
+set "ARG_MODE="
 
 if /i "%~1"=="install" goto arg_install
-if /i "%~1"=="check" set "ARGS=-Action check" & goto run
-if /i "%~1"=="remove" set "ARGS=-Action remove" & goto run
+if /i "%~1"=="check" goto arg_check
+if /i "%~1"=="remove" goto arg_remove
 if not "%~1"=="" goto arg_name_install
 
 echo.
@@ -66,21 +67,43 @@ if "%NAME%"=="" set "NAME=winmm.dll"
 set "ARGS=-Action install -Name %NAME%" & goto run
 
 :arg_install
-set "ARGS=-Action install" & goto run
+set "ARG_MODE=1"
+set "ARGS=-Action install"
+goto run
+
+:arg_check
+set "ARG_MODE=1"
+set "ARGS=-Action check"
+goto run
+
+:arg_remove
+set "ARG_MODE=1"
+set "ARGS=-Action remove"
+goto run
 
 :arg_name_install
-set "ARGS=-Action install -Name %~1" & goto run
+set "ARG_MODE=1"
+set "ARGS=-Action install -Name %~1"
+goto run
 
 :run
-if not exist "%PS1%" (
-  echo.
-  echo ERROR: tools\asi_loader_install.ps1 was not found next to this script.
-  echo Extract the whole package and run this file again.
-  goto done
-)
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %ARGS%
+if exist "%PS1%" goto have_helper
 echo.
-echo asi-loader-exit=%errorlevel%
+echo ERROR: tools\asi_loader_install.ps1 was not found next to this script.
+echo Extract the whole package and run this file again.
+if defined ARG_MODE goto arg_failed
+goto done
+:arg_failed
+exit /b 1
+:have_helper
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %ARGS%
+set "RC=%ERRORLEVEL%"
+echo.
+echo asi-loader-exit=%RC%
+if defined ARG_MODE goto arg_exit
+goto done
+:arg_exit
+exit /b %RC%
 
 :done
 pause
