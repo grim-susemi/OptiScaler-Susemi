@@ -14,6 +14,13 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSCommandPath
+# Repair-r2 (B1): -SkipBuild is rejected unconditionally for release packaging. A timestamp
+# check cannot prove the DLL was linked from current source (equal timestamps admit
+# source-stale or substituted binaries), so no -SkipBuild invocation may stage a ZIP.
+# T10 clean rebuilds never pass -SkipBuild and are unaffected.
+if ($SkipBuild) {
+    throw 'Refusing: -SkipBuild is not allowed for release packaging. Rebuild from current source without -SkipBuild so the staged DLL is proven fresh; no output was staged.'
+}
 # T5 A-only gate: the RTX 20/30 (SM75/SM86) MFG payload variant is not distributed from this
 # worktree - no affirmative redistribution rights were found (vendor/dlssg_sm86/THIRD_PARTY_NOTICES.txt,
 # docs/rtx2030-payload-contract.md). Refuse with or without -AcceptAmpereMfgLicenses, before the
@@ -94,21 +101,6 @@ function Write-StalePairReport {
     }
 }
 Write-StalePairReport -ObjectPath $objPath -DllPath (Join-Path $buildRoot 'OptiScaler.dll')
-# T5 fail-closed -SkipBuild: a skipped build cannot smuggle an unverified (missing or stale) DLL
-# into a new ZIP. A fresh full build above already re-linked the DLL, so this only fires for
-# -SkipBuild. The flavour assertion above is unchanged (tests/run_flavour_gate_negative.ps1
-# exercises its live block).
-if ($SkipBuild) {
-    $skipDll = Join-Path $buildRoot 'OptiScaler.dll'
-    if (-not (Test-Path -LiteralPath $skipDll -PathType Leaf)) {
-        throw "Unverified -SkipBuild: built DLL is missing: $skipDll. Rebuild without -SkipBuild."
-    }
-    $dllTime = (Get-Item -LiteralPath $skipDll).LastWriteTimeUtc
-    $objTime = (Get-Item -LiteralPath $objPath).LastWriteTimeUtc
-    if ($dllTime -lt $objTime) {
-        throw ("Unverified -SkipBuild: OptiScaler.dll (mtime={0:o}) predates the flavour-probe object (mtime={1:o}); the DLL may be stale. Rebuild without -SkipBuild." -f $dllTime, $objTime)
-    }
-}
 # Validate every source before creating the staging tree. An explicit manifest prevents stale
 # Streamline/MFG, removed NR helpers or discarded experiment files entering this package.
 $files = @{}
