@@ -14,6 +14,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSCommandPath
+# T23 rc2 guard: -Version v11.2-rc2 is never packaged by this ordinary script. The approved
+# rc2 candidate is the byte-pinned repack of the published rc1 ZIP produced by the tracked
+# recipe tools/repack_rc2.py (output OptiScaler-NR-v11.2-rc2.zip, sha256 42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a).
+# Refuse before the -SkipBuild/-IncludeAmpereMfg gates, the pinned-loader check, any build and
+# any staging so no same-name rc2 output can exist; every other -Version keeps the prior
+# behavior below unchanged.
+if ($Version -eq 'v11.2-rc2') {
+    throw 'Refusing: -Version v11.2-rc2 must not be packaged by this ordinary script; the rc2 candidate is reproduced by the pinned repack recipe tools/repack_rc2.py. No output was staged.'
+}
 # Repair-r2 (B1): -SkipBuild is rejected unconditionally for release packaging. A timestamp
 # check cannot prove the DLL was linked from current source (equal timestamps admit
 # source-stale or substituted binaries), so no -SkipBuild invocation may stage a ZIP.

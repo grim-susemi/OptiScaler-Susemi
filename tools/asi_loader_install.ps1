@@ -132,7 +132,7 @@ switch ($Action) {
                 Info ('Restored the previous ' + $Name + ' from ' + $receipt.backupDir)
                 $restored = $true
             } else {
-                Write-Host ('Receipt backup is gone (' + $receipt.backupDir + '); removing the loader without restore.') -ForegroundColor Yellow
+                Fail ('Refusing to remove ' + $Name + ': receipt backup is missing (' + $receipt.backupDir + '). Installed file and receipt preserved.')
             }
         }
         if (-not $restored) { Remove-Item -LiteralPath $target -Force; Info ('Removed ' + $Name) }

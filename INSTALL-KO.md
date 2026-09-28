@@ -1,13 +1,13 @@
 # 설치 안내 (한국어)
 
-[수세미 안정판 최신 릴리스 (현재 v11.1)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)와 [실험판 v11.2-rc1 직접 페이지](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc1)는 다릅니다. 실험판은 아직 게시되지 않았을 수 있습니다. 새 후보는 A-only이며 [후보 범위와 소스 출처](docs/RELEASE-v11.2-rc1.md)를 먼저 확인하세요. 게시 전에는 다운로드 파일이나 해시가 없습니다.
+[수세미 안정판 최신 릴리스 (현재 v11.1)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)와 [실험판 v11.2-rc2 A-only 직접 페이지](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc2)는 다릅니다. 게시 후에는 rc2 페이지에서 ZIP과 체크섬을 확인하고 [rc2 릴리스 안내](docs/RELEASE-v11.2-rc2.md)를 먼저 읽으세요. 게시된 rc1은 과거 버전이며, 기록된 백업이 없을 때 ASI 로더 제거가 설치된 로더를 삭제할 수 있으므로 rc2 후보를 사용하세요.
 
 이 패키지는 OptiScaler NR 빌드(wilsjo2 v0.8.8 기반, RTX 40 MFG 언락 포함)에 한국어 메뉴 번역과 두 가지 도우미(ASI 로더, Streamline 페처)를 더한 것입니다.
 
 - NR(뉴럴 렌더링)은 실험 기능이며 **기본 꺼짐**입니다.
 - 안티치트가 있는 온라인 게임에는 사용하지 마세요.
 - 설치 전에 기존 OptiScaler 파일과 INI를 백업하세요.
-- 실사용 검증은 이전 v0.8.7 기반 KO 패키지의 붉은사막에서 완료했습니다. 이 v0.8.8 기반 패키지의 인게임 확인은 아직 진행 중입니다.
+- 과거 소유자의 rc1 붉은사막 실행에서는 동일한 코어 DLL을 사용해 XeFG 완성 화면 NR과 리쉐이드 효과를 화면에서 관찰했습니다. 설정과 로드 순서를 함께 바꿨으므로 단독 원인은 입증되지 않았고, rc2 수정 설치기의 실게임 제거 동작이나 rc2 패키지 별도 실행은 검증되지 않았습니다.
 - RTX 20/30 MFG 언락: 아래 절은 과거 v11.1 B 패키지의 기능 설명입니다. 새 A-only 배포 후보에는 B 페이로드를 넣지 않습니다.
 
 영문 안내: [INSTALL-DLSSNR.md](INSTALL-DLSSNR.md). 리쉐이드를 먼저 로드하는 XeFG 완성 화면 NR 설정과 되돌리기: [로드 순서 안내](docs/XEFG-NR-RESHADE-LOAD-ORDER.md).
@@ -63,7 +63,7 @@ NR은 OptiScaler 안에서 동작합니다. 별도 NR 헬퍼 DLL은 필요 없�
 
 ## XeFG 프레임 생성에서의 NR 배치 (선택)
 
-XeFG를 켠 상태는 NR 배치 경로가 따로입니다. 아래 설정 전용 경로는 새 빌드 없이 바로 쓸 수 있고, 프레임 생성을 켠 채로 지연(deferred) 캐리어를 유지합니다. 프레임 생성은 계속 켜 둔 상태로 두세요. 이 빌드에는 애플리케이션 프레임 핸드오프(owned application-frame handoff)가 포함되어 있어, XeFG에서 완성 화면(finished picture) 경로를 사용할 수 있습니다. 인게임 검증은 아직 남아 있습니다. 배치 경로 자체는 [브리지 문서](docs/NR-FINISHED-BRIDGES.md)에 설명되어 있습니다.
+XeFG를 켠 상태는 NR 배치 경로가 따로입니다. 아래 설정 전용 경로는 새 빌드 없이 바로 쓸 수 있고, 프레임 생성을 켠 채로 지연(deferred) 캐리어를 유지합니다. 프레임 생성은 계속 켜 둔 상태로 두세요. 이 빌드에는 애플리케이션 프레임 핸드오프(owned application-frame handoff)가 포함되어 있어, XeFG에서 완성 화면(finished picture) 경로를 사용할 수 있습니다. 동일 코어의 과거 rc1 소유자 관찰만 있으며 rc2 패키지의 별도 인게임 검증은 남아 있습니다. 배치 경로 자체는 [브리지 문서](docs/NR-FINISHED-BRIDGES.md)에 설명되어 있습니다.
 
 | 설정 | 값 | 위치 |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ Transfer=1 drops the DLSS-carried enlargement (composed by the shader instead); 
 - 동봉된 XeFG SDK는 HDR10 (`R10G10B10A2_UNORM`)만 지원합니다: no FP16/scRGB, FP16과 scRGB는 지원하지 않습니다.
 - frames_presented counts submitted pictures, not verified scanout. 즉 제출된 화면 수를 세는 값이고, 실제 스캔아웃까지 확인한 값은 아닙니다.
 
-이 배치 경로들은 이 장비의 게임 안에서 검증하지 않았습니다. 여기에는 RTX 20/30 실기 GPU도, XeFG 세션도 없습니다. 새 R2 후보 역시 인게임 검증을 마치지 않았습니다. 리쉐이드 선행 로드의 제한 조건과 원본 바이트 복원 방법은 [별도 안내](docs/XEFG-NR-RESHADE-LOAD-ORDER.md)를 보세요. 최종 인게임 확인은 소유자가 직접 진행합니다.
+과거 소유자 rc1 세션은 이 후보와 동일한 코어 DLL로 XeFG·완성 화면 NR·리쉐이드 공존을 관찰했지만, 이 rc2 패키지와 수정 설치기를 새로 실행해 확인한 것은 아닙니다. 이 장비의 RTX 20/30 실기 검증도 없습니다. 리쉐이드 선행 로드의 제한 조건과 원본 바이트 복원 방법은 [별도 안내](docs/XEFG-NR-RESHADE-LOAD-ORDER.md)를 보세요.
 
 ## 프레임 생성 런타임 (선택)
 
@@ -178,7 +178,7 @@ XeFG의 멀티 프레임 생성은 이제 외부 `XeFGUnlock.asi` 없이 본체�
 - 프로바이더 빌드가 다르면 언락이 스스로 거부합니다. 로그에 `XeFG unlock: unrecognised provider build ...` 뒤에 `rolled back`이 찍힙니다.
 - 6X 초과는 검증되지 않았습니다.
 
-이 트리에서는 아직 인게임 검증 전이고, 인게임 확인은 소유자가 진행합니다. 자세한 내용: [MFG 언락 문서](docs/README-XeFG-MFG-Unlock.md), [페이싱 문서](docs/README-XeFG-Pacing.md), [설정 문서](Config.md)
+동일 코어의 과거 rc1 소유자 게임 관찰은 있으나 rc2 패키지의 별도 실행은 검증되지 않았습니다. 자세한 설정은 [설정 문서](Config.md)를 보세요.
 
 ## 파일 구성
 

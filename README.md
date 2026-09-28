@@ -40,7 +40,7 @@
 
 ## Susemi downloads
 
-[Susemi stable release (latest, currently v11.1)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) is separate from the [experimental v11.2-rc1 direct-tag page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc1). The experimental link may not have a published release yet. Its planned package is A-only; see the [candidate scope and provenance](docs/RELEASE-v11.2-rc1.md). The OptiScaler upstream download badges above are not Susemi downloads.
+[Susemi stable release (latest, currently v11.1)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) is separate from the experimental [v11.2-rc2 A-only candidate direct-tag page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc2) (available after publication). See [rc2 release notes](docs/RELEASE-v11.2-rc2.md). [v11.2-rc1](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc1) is historical: its ASI loader removal can delete an installed loader when a recorded backup is missing; use the corrected rc2 candidate instead. The OptiScaler upstream download badges above are not Susemi downloads.
 
 ## Neural Rendering on this branch
 
