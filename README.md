@@ -40,7 +40,7 @@ NR 모델(`nvngx_dlssnr.dll`)은 사용자가 직접 준비합니다 (the NR mod
 - Recommended: [latest release page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) — points at the newest stable (currently v11.1)
 - Current release: [v11.2-rc2 prerelease](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc2), the newest publish. 취지와 한계는 [`docs/RELEASE-v11.2-rc2.md`](docs/RELEASE-v11.2-rc2.md) 참고 (candidate scope and limits).
 - `OptiScaler-current-ko.zip` (Korean) / `OptiScaler-current-en.zip` (English) — grab one (same file names every release)
-- One-click installer release is being prepared. Link goes here once the GitHub release is out: <!-- RELEASE-LINK-PENDING -->
+- One-click installer release is being prepared. Link goes here once the GitHub release is out: https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1
 
 ## <a id="susemi-install"></a>Install
 
