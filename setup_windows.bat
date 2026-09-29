@@ -1,5 +1,7 @@
 REM Setup OptiScaler for your game
 @echo off
+REM --- Orchestrated (noninteractive) staging mode: first argument only. ---
+if /i "%~1"=="--orchestrated" goto orch_main
 chcp 65001 >nul
 cls
 echo  ::::::::  :::::::::  ::::::::::: :::::::::::  ::::::::   ::::::::      :::     :::        :::::::::: :::::::::  
@@ -688,3 +690,85 @@ echo Uninstaller created.
 echo.
 
 goto create_uninstaller_return
+
+REM ============================================================
+REM Orchestrated (noninteractive) staging mode.
+REM Entered only when the first argument is --orchestrated; the legacy
+REM interactive flow above is untouched. Operates on a private staging
+REM copy only: no prompts, no network, no config edits, no uninstaller
+REM generation, no pause and no self-delete. Deletes nothing; the caller
+REM must pass a free staging directory as the cwd.
+REM Usage: setup_windows.bat --orchestrated <asi|proxy> [--exename <name>]
+REM Requires env SUSEMI_ORCH_STAGE=1 and OptiScaler.dll in the cwd.
+REM Emits one ASCII machine line (status=...) first, then a human line.
+REM ============================================================
+:orch_main
+setlocal EnableDelayedExpansion
+
+set "ORCH_ROUTE=%~2"
+set "ORCH_EXENAME="
+if /i "%~3"=="--exename" set "ORCH_EXENAME=%~4"
+
+if /i "!ORCH_ROUTE!"=="asi" goto orch_route_ok
+if /i "!ORCH_ROUTE!"=="proxy" goto orch_route_ok
+echo status=invalid-invocation reason=bad-route
+exit /b 2
+
+:orch_route_ok
+REM Tolerate cmd's `set VAR=1 && ...` trailing space; the value must still be exactly 1.
+set "ORCH_STAGE=!SUSEMI_ORCH_STAGE: =!"
+if not "!ORCH_STAGE!"=="1" (
+    echo status=invalid-invocation reason=stage-env-missing
+    exit /b 2
+)
+
+if not "!ORCH_EXENAME!"=="" (
+    set "ORCH_BADNAME="
+    if not "!ORCH_EXENAME:\=!"=="!ORCH_EXENAME!" set "ORCH_BADNAME=1"
+    if not "!ORCH_EXENAME:/=!"=="!ORCH_EXENAME!" set "ORCH_BADNAME=1"
+    if defined ORCH_BADNAME (
+        echo status=invalid-invocation reason=bad-exename
+        exit /b 2
+    )
+)
+
+if not exist "OptiScaler.dll" (
+    echo status=install-failed reason=missing-optiscaler-dll
+    exit /b 1
+)
+
+if /i "!ORCH_ROUTE!"=="asi" (
+    set "ORCH_TARGET=OptiScaler.asi"
+    set "ORCH_REASON=asi"
+) else (
+    set "ORCH_TARGET=!ORCH_EXENAME!"
+    if "!ORCH_TARGET!"=="" set "ORCH_TARGET=dxgi.dll"
+    set "ORCH_REASON=proxy"
+)
+
+if /i "!ORCH_TARGET!"=="OptiScaler.dll" (
+    echo status=install-failed reason=target-equals-source
+    exit /b 1
+)
+if exist "!ORCH_TARGET!" (
+    echo status=install-failed reason=target-exists
+    exit /b 1
+)
+
+rename "OptiScaler.dll" "!ORCH_TARGET!" >nul 2>&1
+if errorlevel 1 (
+    echo status=install-failed reason=rename-failed
+    exit /b 1
+)
+if not exist "!ORCH_TARGET!" (
+    echo status=install-failed reason=verify-target-missing
+    exit /b 1
+)
+if exist "OptiScaler.dll" (
+    echo status=install-failed reason=verify-source-remains
+    exit /b 1
+)
+
+echo status=staged reason=!ORCH_REASON! staged=!ORCH_TARGET!
+echo Staged OptiScaler payload as !ORCH_TARGET!.
+exit /b 0
