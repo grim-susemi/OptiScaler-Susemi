@@ -90,8 +90,7 @@ for _sub in (
 # repack_installer_candidate.py). read_inputs() verifies these exist + SHA-stable.
 SLIM_WORKTREE_INPUTS = (
     'Install_OptiScaler_windows.bat',
-    'INSTALL-ONECLICK-KO.md',
-    'INSTALL-ONECLICK-EN.md',
+    'INSTALL-ONECLICK.md',
     # Three coordinator PS1 scripts from worktree (not in rc2).
     'tools/susemi_installer.ps1',
     'tools/susemi_transaction.ps1',

@@ -11,8 +11,7 @@
 Korean UI + MFG unlock + 20/30-series FG bundle. Grab the latest below.
 
 [![Latest release](https://img.shields.io/badge/Download-latest-green?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)
-[![Korean build](https://img.shields.io/badge/Download-KO-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest/download/OptiScaler-current-ko.zip)
-[![English build](https://img.shields.io/badge/Download-EN-blue?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest/download/OptiScaler-current-en.zip)
+[![One-click installer](https://img.shields.io/badge/One--click-Installer-blueviolet?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1)
 [![Total downloads](https://img.shields.io/github/downloads/grim-susemi/OptiScaler-Susemi/total?style=for-the-badge&logo=github&logoColor=white&label=Total%20downloads)](https://github.com/grim-susemi/OptiScaler-Susemi/releases)
 
 </div>
@@ -22,10 +21,10 @@ Korean UI + MFG unlock + 20/30-series FG bundle. Grab the latest below.
 
 ## <a id="susemi-oneclick"></a>One-click installer (recommended)
 
-`Install_OptiScaler_windows.bat` 하나면 끝. Run the bat, pick the game EXE, watch the progress, check the preview, consent. Done.
-제거도 안전합니다: it removes only what it installed, and existing ReShade settings are left untouched.
-NR 모델(`nvngx_dlssnr.dll`)은 사용자가 직접 준비합니다 (the NR model stays user-supplied).
-가이드는 같은 패키지에 (guides in the same package): [INSTALL-ONECLICK-KO.md](INSTALL-ONECLICK-KO.md) / [INSTALL-ONECLICK-EN.md](INSTALL-ONECLICK-EN.md). The bat ships with the upcoming one-click installer release, see [Download](#susemi-download).
+Running `Install_OptiScaler_windows.bat` is all it takes. Pick the game EXE, watch the progress, check the preview, consent. Done.
+Removal is safe too: it removes only what it installed, and existing ReShade settings are left untouched.
+The NR model (`nvngx_dlssnr.dll`) stays user-supplied.
+The unified guide ships in the same package: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md). The bat ships with the one-click installer release, [v11.3-installer-a1](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1), see [Download](#susemi-download).
 
 ## <a id="susemi-diff"></a>What's changed in this fork
 
@@ -33,18 +32,17 @@ NR 모델(`nvngx_dlssnr.dll`)은 사용자가 직접 준비합니다 (the NR mod
 - **MFG unlock** — frame-generation ratio unlock for 40-series cards. Fail-closed + active indicator
 - **NR 200% restored** — neural rendering 200% model + D3D12 inspection hold
 - **20/30-series FG bundle** — DLSS / Streamline / FG files bundled in the zip, extract and go
-- **English build included** — same content as a separate EN zip
+- **Language-unified package** — one download serves both Korean and English
 
 ## <a id="susemi-download"></a>Download
 
 - Recommended: [latest release page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) — points at the newest stable (currently v11.1)
-- Current release: [v11.2-rc2 prerelease](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc2), the newest publish. 취지와 한계는 [`docs/RELEASE-v11.2-rc2.md`](docs/RELEASE-v11.2-rc2.md) 참고 (candidate scope and limits).
-- `OptiScaler-current-ko.zip` (Korean) / `OptiScaler-current-en.zip` (English) — grab one (same file names every release)
-- One-click installer release is being prepared. Link goes here once the GitHub release is out: https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1
+- Latest prerelease: [v11.2-rc2](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc2). Candidate scope and limits are in [`docs/RELEASE-v11.2-rc2.md`](docs/RELEASE-v11.2-rc2.md).
+- One-click installer: [v11.3-installer-a1 release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1) — one unified ZIP for all languages; guide: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md)
 
 ## <a id="susemi-install"></a>Install
 
-**One-click first (recommended):** run `Install_OptiScaler_windows.bat` from the package root. 한 세션에 언어 선택, 게임 EXE 선택, 진단, 미리보기, 동의, 적용, 결과까지 진행됩니다 (one session covers language, game EXE, diagnosis, preview, consent, apply).
+**One-click first (recommended):** run `Install_OptiScaler_windows.bat` from the package root. One session covers language selection, game EXE selection, diagnosis, preview, consent, apply and the result.
 
 Advanced / legacy (`setup_windows.bat` flow, or the manual zip steps):
 

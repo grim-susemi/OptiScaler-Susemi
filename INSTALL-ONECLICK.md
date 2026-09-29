@@ -1,9 +1,10 @@
-# One-click install: Install_OptiScaler_windows.bat (English guide)
+# One-click install: Install_OptiScaler_windows.bat
 
 This document describes the recommended install path for the Susemi package. Run
 `Install_OptiScaler_windows.bat` and one session covers language selection, game executable
 selection, diagnosis, install consent, applying and the result screen. You do not need to run any
 other install script. Each screen asks one question, and Enter always picks the safe default.
+Korean users: a short summary in Korean is at the end of this document.
 
 The package you install from must be rc2 or newer. Do not use the historical rc1. rc1 carried a
 removal path that could delete an installed ASI loader when a recorded backup was missing. That
@@ -219,3 +220,16 @@ looking is yours to do, and the success screen says so explicitly.
 `setup_windows.bat` (standalone), `Install_AsiLoader_windows.bat` and
 `Streamline_fetcher_windows.bat` remain for existing users. The one-click tool does not require
 them; it is the recommended path. Only a missing Streamline runtime needs the official NVIDIA fetch, after consent.
+
+## 설치 요약 (Korean summary)
+
+한국어 사용자용 요약입니다. 세부 규칙과 예외는 위 본문을 참고하세요. 같은 5단계 흐름을 압축했습니다.
+
+1. 게임과 런처를 종료하고, rc2 이상 패키지의 루트에서 `Install_OptiScaler_windows.bat`를 실행합니다. 언어는 Enter(한국어) 또는 2(English)로 고릅니다.
+2. 파일 선택 대화상자에서 64비트 게임 .exe를 고릅니다. 선택 없이 창을 닫으면 아무 것도 바뀌지 않고 종료하며, 고른 경로는 다시 표시되어 확인할 수 있습니다.
+3. 진단은 읽기 전용입니다(네트워크 없음, 게임 실행 없음). 결과가 준비(ready)면 4단계 동의 화면으로 진행하고, 그 외 결과(입력 부족 · 충돌 · 게임 확인 필요)는 표의 다음 행동을 직접 마친 뒤 다시 실행합니다. 32비트 실행 파일은 거부됩니다.
+4. `설치를 진행할까요?`에서 2(예)를 고르면 ASI 방식(`OptiScaler.asi` + `winmm.dll`)으로 설치됩니다. ReShade를 먼저 로드하려면 이어지는 winmm.ini 질문에 동의하세요. 검증된 파일만 다루며, 프록시 변환은 사본 방식이라 원본이 그대로 남습니다.
+5. 진행은 `trace|` 줄, 적용 전 미리보기는 `preview|` 줄로 보이고 마지막 `status=...` 준이 기계 판독용 결과입니다. 성공 확인은 도구 몫이 아니라 게임을 직접 실행하는 사용자 몫입니다.
+6. NR은 도구가 내려받지 않습니다. `nvngx_dlssnr.dll`을 직접 준비하고 [INSTALL-DLSSNR.md](INSTALL-DLSSNR.md)의 SHA-256으로 해시를 확인하세요. NR은 기본 꺼짐이며 게임 메뉴에서 켭니다.
+7. 제거는 명령행으로 합니다: `Install_OptiScaler_windows.bat remove -Exe "<게임 exe 경로>" -Consent yes`. 설치기가 만들거나 바꾼 파일만 되돌리고 다른 모드의 파일은 만지지 않으며, 백업과 설치 기록을 근거로 진행됩니다.
+8. 실패하면 자체 복구로 기록된 원본을 되돌립니다. 안티치트가 있는 온라인 게임에는 사용하지 마세요. ReShade와 Streamline 런타임은 도구가 내려받지 않으니 필요하면 본문 "레거시 스크립트" 절을 참고하세요.

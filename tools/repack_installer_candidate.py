@@ -52,8 +52,7 @@ ADDITIONS = (
     'tools/susemi_installer.ps1',
     'tools/susemi_transaction.ps1',
     'tools/susemi_stage_helpers.ps1',
-    'INSTALL-ONECLICK-KO.md',
-    'INSTALL-ONECLICK-EN.md',
+    'INSTALL-ONECLICK.md',
 )
 
 # Forbidden path fragments for the addition set (internal tests/evidence).
