@@ -6,7 +6,7 @@
 
   All three actions live in this file and its owned children:
     diagnose - read-only inspection: no writes, no network, no process launch.
-    install  - %TEMP% staging from the pinned local rc2 ZIP, then the owned
+    install  - %TEMP% staging from pinned shipped payloads (or explicit rc2 ZIP), then the owned
                tools/susemi_transaction.ps1 plan/prepare/apply/verify plus an
                independent post-apply byte check and recover on any failure.
     remove   - journal-driven reverse of a prior install via
@@ -51,11 +51,36 @@ $Messages = @{
     ExeAsk          = '게임 실행 파일(.exe) 전체 경로를 붙여넣으세요 (취소: 빈 입력)'
     ExeChosen       = '선택한 실행 파일: {0}'
     ExeCancelled    = '실행 파일이 선택되지 않아 종료합니다. 설치하지 않았습니다.'
+    AdvisoryAsk     = '이 게임이 GTA V Enhanced입니까? [1] 기타/확실하지 않음 (기본값)  [2] GTA V Enhanced'
+    AdvisoryGtavEnhanced = @(
+      'GTA V Enhanced 주의사항 (자동 판별이 아니라 사용자가 직접 선택한 경우의 안내입니다):'
+      '공식 위키 기준으로 모드 사용 시 BattlEye를 꺼야 하며, 온라인 접속에는 사용하지 마세요.'
+      'XeFG 호환성과 보고된 프리즈 원인은 아직 확인되지 않았습니다. 지금은 실패한 FG 경로를 끄고 사용하세요.'
+      '확인을 위해 GPU, 정확한 패키지/코어 빌드, FG 입력/출력, 게임 내 FG 토글, HDR/창 모드, 활성화·실패 시점의 OptiScaler.log 구간을 알려주세요.'
+      '네이티브 DLSS-FG 존재만으로는 충돌 근거가 아닙니다. README의 제한은 OptiFG+HUDfix에 한정된 내용입니다.'
+      'DirectStorageFix는 상위 INI 저장 관련 참고일 뿐이며 자동 적용하거나 프리즈 해결책으로 지정하지 않습니다.'
+      '게임 호환성을 보장하지 않습니다.'
+    )
+    HoldPrompt      = 'Enter를 누르면 창이 닫힙니다.'
+    NextActions = @{
+      'exe-not-found' = '게임 실행 파일을 다시 선택하세요.'
+      'not-x64' = 'x64 게임 실행 파일을 선택하세요.'
+      'game-running' = '게임을 종료한 뒤 다시 시도하세요.'
+      'ual-config-conflict' = '위에 표시된 로더와 설정 파일을 확인하세요.'
+      'reshade-referenced-but-absent' = '설정이 참조하는 ReShade 파일을 준비하세요.'
+      'reshade-identity-unverified' = 'ReShade 파일의 출처를 확인하세요.'
+      'unsupported-state' = '기존 로더와 모드 설치 상태를 확인하세요.'
+      'non-winmm-loader' = '기존 로더를 확인하세요. 자동 변환하지 않습니다.'
+      'exe-selection-cancelled' = '설치한 파일이 없습니다.'
+      'guided-target-conflict' = '설치 대상 파일과 기존 로더를 확인하세요. 자동 교체하지 않습니다.'
+    }
     InstallAsk      = '설치를 진행할까요? [1] 아니요 (기본값)  [2] 예'
     Declined        = '동의하지 않아 설치하지 않았습니다.'
     InstallConsentRequired = '동의(Consent)가 필요합니다. -Consent yes 로 다시 실행하세요.'
     InstallRunning  = '게임 확인 필요: 게임이 실행 중입니다. 게임을 종료한 뒤 다시 설치하세요.'
     InstallConflict = '충돌: 설치를 중단했습니다. 위 이유를 해결한 뒤 다시 시도하세요.'
+    PackagePayloadMissing = '패키지 페이로드가 없습니다. 전체 패키지를 새 폴더에 다시 압축 해제한 뒤 설치하세요.'
+    PackagePayloadMismatch = '패키지 페이로드를 검증할 수 없습니다. 올바른 패키지를 새 폴더에 다시 압축 해제한 뒤 설치하세요.'
     InstallInstalled = '설치 완료: 페이로드 바이트를 검증했습니다.'
     InstallFailed   = '설치 실패: 변경 사항을 복구했습니다.'
     ReshadeFirstAsk = 'ReShade를 먼저 로드하도록 winmm.ini를 설정할까요? [1] 아니요 (기본값)  [2] 예'
@@ -89,11 +114,36 @@ $Messages = @{
     ExeAsk          = 'Paste the full path of the game .exe (empty input cancels)'
     ExeChosen       = 'Selected executable: {0}'
     ExeCancelled    = 'No executable selected; exiting. Nothing was installed.'
+    AdvisoryAsk     = 'Is this game GTA V Enhanced? [1] Other / not sure (default)  [2] GTA V Enhanced'
+    AdvisoryGtavEnhanced = @(
+      'GTA V Enhanced caution (from your explicit selection, not automatic identification):'
+      'Per the official wiki, mod use requires BattlEye disabled; do not use it online.'
+      'XeFG compatibility and this reported freeze cause are still unconfirmed. For now, disable the failing FG route.'
+      'To help confirm, report GPU, exact package/core build, FG input/output, the in-game FG toggle, HDR/window mode, and the OptiScaler.log section around enabling/failure.'
+      'Native DLSS-FG presence alone is not conflict proof. The README limitation is specifically about OptiFG + HUDfix.'
+      'DirectStorageFix is only an upstream INI-save note; it is not installed automatically or prescribed as a freeze fix.'
+      'No game compatibility is promised.'
+    )
+    HoldPrompt      = 'Press Enter to close this window.'
+    NextActions = @{
+      'exe-not-found' = 'Select the game executable again.'
+      'not-x64' = 'Select an x64 game executable.'
+      'game-running' = 'Close the game and retry.'
+      'ual-config-conflict' = 'Inspect the named loader and configuration files.'
+      'reshade-referenced-but-absent' = 'Supply the referenced ReShade file.'
+      'reshade-identity-unverified' = 'Verify the source of the ReShade file.'
+      'unsupported-state' = 'Inspect the existing loader and mod installation.'
+      'non-winmm-loader' = 'Inspect the existing loader. It is not converted automatically.'
+      'exe-selection-cancelled' = 'Nothing was installed.'
+      'guided-target-conflict' = 'Inspect the install targets and existing loaders. They are not replaced automatically.'
+    }
     InstallAsk      = 'Proceed with install? [1] No (default)  [2] Yes'
     Declined        = 'Consent not given; nothing was installed.'
     InstallConsentRequired = 'Consent required: re-run with -Consent yes.'
     InstallRunning  = 'Game verification required: the game is running. Close it and install again.'
     InstallConflict = 'Conflict: install stopped. Resolve the reason above and retry.'
+    PackagePayloadMissing = 'Package payload missing. Extract the complete package into a new folder and retry.'
+    PackagePayloadMismatch = 'Package payload could not be verified. Extract a valid package into a new folder and retry.'
     InstallInstalled = 'Installed: payload bytes verified.'
     InstallFailed   = 'Install failed: changes were recovered.'
     ReshadeFirstAsk = 'Also set winmm.ini so ReShade loads first? [1] No (default)  [2] Yes'
@@ -207,7 +257,7 @@ function Get-DiagnosisContext {
     code = 1; status = ''; reason = ''; human = ''; ko = $ko
     exePath = ''; exeDir = ''; exeSha = ''; exeOrig = ''; exeProd = ''
     isX64 = $false; gameRunning = $false
-    cands = @(); candFiles = @()
+    cands = @(); candFiles = @(); installTargets = $null
     ualNames = @(); optiNames = @(); reshadeNames = @()
     hasLoader = $false; loaderBase = $null; hasOpti = $false; ualAmbiguous = $false
     reshadeExist = $false; reshadeValid = $false; reshadeReferenced = $false
@@ -265,6 +315,13 @@ function Get-DiagnosisContext {
   $exeDir = Split-Path -Parent $exePath
   if ([string]::IsNullOrEmpty($exeDir)) { $exeDir = (Get-Location).Path }
   $ctx.exeDir = $exeDir
+  # Enumerating directory entries also sees dangling links; Test-Path alone
+  # cannot prove that an install target is genuinely absent.
+  try {
+    $ctx.installTargets = @(Get-ChildItem -LiteralPath $exeDir -Force -ErrorAction Stop | Where-Object {
+      $_.Name -ieq 'winmm.dll' -or $_.Name -ieq 'OptiScaler.asi'
+    } | ForEach-Object { @{ name = $_.Name; attributes = $_.Attributes } })
+  } catch { $ctx.installTargets = $null }
   $cands = @()
   try { $cands = @(Get-ChildItem -LiteralPath $exeDir -File -ErrorAction Stop | Where-Object { ($_.Extension -ieq '.dll') -or ($_.Extension -ieq '.asi') }) } catch { $cands = @() }
   $ctx.cands = $cands
@@ -669,6 +726,31 @@ function Test-PackageSatisfied {
   return $true
 }
 
+function Test-GuidedInstallEligible {
+  # Pure allowlist over a fresh read-only diagnosis. Identity uses the existing
+  # content/hash rules only, never the target filename on its own.
+  param($Ctx)
+  $result = @{ eligible = $false; conflict = $false }
+  if (-not $Ctx.isX64 -or $Ctx.gameRunning) { return $result }
+  if ($null -eq $Ctx.installTargets) { $result.conflict = $true; return $result }
+  foreach ($target in @($Ctx.installTargets)) {
+    if (($target.attributes -band [IO.FileAttributes]::Directory) -or
+        ($target.attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        ($target.name -ieq 'winmm.dll' -and $Ctx.ualNames -notcontains $target.name) -or
+        ($target.name -ieq 'OptiScaler.asi' -and $Ctx.optiNames -notcontains $target.name)) {
+      $result.conflict = $true; return $result
+    }
+  }
+  $singleWinmm = (@($Ctx.ualNames).Count -eq 1 -and $Ctx.ualNames[0] -ieq 'winmm.dll')
+  if ($Ctx.status -eq 'ready' -and $Ctx.reason -eq 'ready' -and $singleWinmm) {
+    $result.eligible = $true
+  } elseif ($Ctx.status -eq 'missing-input' -and $Ctx.reason -eq 'no-loader-or-optiscaler' -and
+            @($Ctx.installTargets).Count -eq 0 -and @($Ctx.ualNames).Count -eq 0) {
+    $result.eligible = $true
+  }
+  return $result
+}
+
 function Invoke-InstallOffer {
   # Same-process continuation after a ready diagnosis; the T7 install body.
   # When the ReShade-first setting is eligible it is offered here explicitly and
@@ -684,6 +766,13 @@ function Invoke-InstallOffer {
       if ($r -match '^(?i:y|yes|2)$') { $rf = $true; $iniConsent = 'yes' }
     } else {
       Write-Output ($M.ReshadeFirstSkip -f $elig.reason)
+    }
+    # Recheck after ALL consent prompts, immediately before the transaction.
+    $fresh = Get-DiagnosisContext -Exe $Exe -Lang $Lang -M $M
+    $gate = Test-GuidedInstallEligible -Ctx $fresh
+    if (-not $gate.eligible) {
+      Write-StatusLine -Status 'refused' -Reason 'guided-target-conflict' -Human $M.NextActions['guided-target-conflict']
+      return 1
     }
     $code = 1
     Invoke-InstallTransaction -Exe $Exe -Route 'asi' -ProxyName '' -Lang $Lang -M $M -ReshadeFirst:$rf -IniConsent $iniConsent | ForEach-Object {
@@ -757,6 +846,23 @@ function Write-GuidedResultScreen {
   foreach ($l in $lines) { Write-Output $l }
 }
 
+function Invoke-GuidedAdvisory {
+  # Presentation-layer guided advisory selector. Rendered after a valid x64
+  # diagnosis is shown and before the install offer or terminal result. This is
+  # advisory text ONLY: it never authenticates the exe, changes routing/status/
+  # exit, writes config, or grants consent. Only the exact answer "2" emits the
+  # single machine marker plus one localized caution; Enter/EOF/any other answer
+  # is the silent default Other. It is not part of Get-DiagnosisContext and is
+  # unreachable from argument modes (they never enter this session).
+  param($M)
+  $sel = Read-Host $M.AdvisoryAsk
+  if ([string]$sel -ne '2') { return }
+  Write-Output 'hint| game=gtav-enhanced source=user'
+  foreach ($line in @($M.AdvisoryGtavEnhanced)) {
+    foreach ($wrapped in (Format-GuidedLines ([string]$line))) { Write-Output $wrapped }
+  }
+}
+
 function Invoke-InteractiveSession {
   # No-argument entry: language -> EXE picker -> diagnosis screen -> install
   # offer -> result screen, all in this one process. The diagnosis status is
@@ -767,12 +873,14 @@ function Invoke-InteractiveSession {
   $sel = Read-Host $Messages.ko.LangAsk
   $lang = 'ko'
   if ($sel -eq '2' -or $sel -eq 'en') { $lang = 'en' }
+  $script:GuidedSessionLang = $lang
   $M = Get-LangTable -Lang $lang
   Write-Output ($M.LangChosen -f $lang)
   $pick = Select-GameExe -M $M
   if (-not [string]::IsNullOrEmpty($pick.notice)) { Write-Output $pick.notice }
   $exe = $pick.path
   if ([string]::IsNullOrWhiteSpace($exe)) {
+    Write-Output $M.NextActions['exe-selection-cancelled']
     Write-StatusLine -Status 'cancelled' -Reason 'exe-selection-cancelled' -Human $M.ExeCancelled
     return 1
   }
@@ -781,11 +889,22 @@ function Invoke-InteractiveSession {
   if (-not [string]::IsNullOrEmpty($ctx.human)) {
     foreach ($line in (Format-GuidedLines ([string]$ctx.human))) { Write-Output $line }
   }
-  if ($ctx.code -ne 0) {
-    Write-StatusLine -Status $ctx.status -Reason $ctx.reason -Human ''
-    return $ctx.code
+  # Advisory selector: after the valid x64 diagnosis is displayed, before the
+  # install offer or the terminal result. Presentation only; no gate coupling.
+  if ($ctx.isX64) { Invoke-GuidedAdvisory -M $M }
+  $gate = Test-GuidedInstallEligible -Ctx $ctx
+  if (-not $gate.eligible) {
+    if ($gate.conflict) {
+      Write-StatusLine -Status 'refused' -Reason 'guided-target-conflict' -Human $M.NextActions['guided-target-conflict']
+    } else {
+      $nextReason = $ctx.reason
+      if ($ctx.hasLoader -and $ctx.loaderBase -ine 'winmm') { $nextReason = 'non-winmm-loader' }
+      if ($M.NextActions.ContainsKey($nextReason)) { Write-Output $M.NextActions[$nextReason] }
+      Write-StatusLine -Status $ctx.status -Reason $ctx.reason -Human ''
+    }
+    return 1
   }
-  # Ready: the same process continues to the informed-consent install offer.
+  # Safe ready or bare target: continue to the informed-consent install offer.
   $offerCode = 1
   Invoke-InstallOffer -Exe $exe -Lang $lang -M $M | ForEach-Object {
     if ($_ -is [int]) { $offerCode = [int]$_ } else { Write-Output $_ }
@@ -796,7 +915,6 @@ function Invoke-InteractiveSession {
 
 # ---- T7 (owned): install action -> staged payload + owned transaction ----
 
-$Rc2ZipDefault = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip'
 $Rc2ZipSha     = '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a'
 $CoreEntryName = 'OptiScaler.dll'
 $CoreSha       = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
@@ -938,6 +1056,36 @@ function Test-InstallProgressConsole {
     $null = $Host.UI.RawUI
   } catch { return $false }
   return $true
+}
+
+function Test-SessionHoldEligible {
+  # Pure hold-eligibility for the no-arg guided epilogue. True only for a guided
+  # session whose caller has a real console on BOTH sides: input (stdin not
+  # redirected plus a usable host UI, via Test-InteractiveInputAvailable) and
+  # output (stdout not redirected plus a usable host UI, via
+  # Test-InstallProgressConsole). The parameters exist so the truth table is
+  # provable without a live console; the production caller passes only -Guided
+  # and the defaults probe this process. No environment override, no test switch.
+  param(
+    [switch]$Guided,
+    [bool]$InputAvailable = (Test-InteractiveInputAvailable),
+    [bool]$OutputAvailable = (Test-InstallProgressConsole)
+  )
+  if (-not $Guided) { return $false }
+  if (-not $InputAvailable) { return $false }
+  if (-not $OutputAvailable) { return $false }
+  return $true
+}
+
+function Invoke-SessionHold {
+  # One localized close line and exactly one Read-Host. EOF (piped or closed
+  # stdin) and any host error end the session normally; the caller's captured
+  # exit code is untouched. Deliberately no finally and no Ctrl+C re-wait: an
+  # interrupt ends the session exactly as it did before this epilogue.
+  param($M)
+  Write-Output $M.HoldPrompt
+  try { $null = Read-Host } catch { }
+  return
 }
 
 function Format-InstallProgressLine {
@@ -1118,13 +1266,49 @@ function Invoke-InstallTransaction {
     }
   }
 
-  $zipPath = $Rc2ZipDefault
-  if (-not [string]::IsNullOrEmpty($env:SUSEMI_RC2_ZIP)) { $zipPath = $env:SUSEMI_RC2_ZIP }
+  $zipPath = $env:SUSEMI_RC2_ZIP
+  $directorySource = [string]::IsNullOrEmpty($zipPath)
+  $packageRoot = Split-Path -Parent $PSScriptRoot
+  if ($directorySource) {
+    Write-Output ('trace| source=directory root=' + $packageRoot)
+    $packageCore = Join-Path $packageRoot $CoreEntryName
+    $packageUal = Join-Path $packageRoot $UalStagedRel
+    foreach ($payload in @($packageCore, $packageUal)) {
+      if (-not (Test-Path -LiteralPath $payload)) {
+        Write-StatusLine -Status 'refused' -Reason 'package-payload-missing' -Human $M.PackagePayloadMissing
+        return 1
+      }
+    }
+    if ((Get-FileSha256 $packageCore) -ne $CoreSha -or (Get-FileSha256 $packageUal) -ne $UalSha) {
+      Write-StatusLine -Status 'refused' -Reason 'package-payload-sha-mismatch' -Human $M.PackagePayloadMismatch
+      return 1
+    }
+  } else {
+    Write-Output ('trace| source=zip path=' + $zipPath)
+  }
 
   $stageDir = Join-Path $env:TEMP ('susemi-inst-stage-' + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
   $journalPath = ''
   try {
+    $coreDll = Join-Path $stageDir 'OptiScaler.dll'
+    $ualStaged = Join-Path $stageDir $UalStagedRel
+    if ($directorySource) {
+      try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $ualStaged) -Force | Out-Null
+        Copy-Item -LiteralPath $packageCore -Destination $coreDll
+        Copy-Item -LiteralPath $packageUal -Destination $ualStaged
+      } catch {
+        Write-StatusLine -Status 'refused' -Reason 'package-payload-sha-mismatch' -Human $M.PackagePayloadMismatch
+        return 1
+      }
+      if ((Get-FileSha256 $coreDll) -ne $CoreSha -or (Get-FileSha256 $ualStaged) -ne $UalSha) {
+        Write-StatusLine -Status 'refused' -Reason 'package-payload-sha-mismatch' -Human $M.PackagePayloadMismatch
+        return 1
+      }
+      Write-InstallExpectation -M $M
+      Write-InstallProgress -Stage 1 -Total 5 -Complete:$true -M $M
+    } else {
     # (1) byte-exact local rc2 ZIP, offline only.
     if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
       Write-StatusLine -Status 'refused' -Reason 'rc2-zip-absent' -Human ("local rc2 ZIP not found: {0}" -f $zipPath)
@@ -1167,6 +1351,9 @@ function Invoke-InstallTransaction {
       Write-StatusLine -Status 'refused' -Reason 'ual-sha-mismatch' -Human 'staged UAL sha256 does not match the pin.'
       return 1
     }
+
+    }
+    Write-Output ('trace| staged-core-sha=' + (Get-FileSha256 $coreDll) + ' staged-ual-sha=' + (Get-FileSha256 $ualStaged))
 
     # (4) place the core under its owned final name via the T5 orchestrated staging path.
     $bat = Join-Path (Split-Path -Parent $PSScriptRoot) 'setup_windows.bat'
@@ -1564,6 +1751,12 @@ if ($argv.Count -eq 0) {
   $sessionCode = 1
   Invoke-InteractiveSession | ForEach-Object {
     if ($_ -is [int]) { $sessionCode = [int]$_ } else { Write-Output $_ }
+  }
+  # Guided epilogue: only for a real console on both streams; one Enter hold so
+  # the result stays readable. Piped/EOF/argument runs never hold, and the exit
+  # code captured above is preserved.
+  if (Test-SessionHoldEligible -Guided) {
+    Invoke-SessionHold -M (Get-LangTable -Lang $script:GuidedSessionLang)
   }
   exit $sessionCode
 }

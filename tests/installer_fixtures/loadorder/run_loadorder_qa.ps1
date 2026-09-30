@@ -239,6 +239,89 @@ function New-OwnedJournal([string]$Target, [string]$SourceSha) {
   return $p
 }
 
+function Get-LoadorderWorktreeSnapshot([string]$Root, [string[]]$ProtectedRel) {
+  # Complete observable repo state at one instant: full porcelain status plus the
+  # content hash of every protected source file the runner depends on. Measurement
+  # failures are recorded explicitly and never look like a valid snapshot.
+  $ErrorActionPreference = 'Continue'
+  $status = ''
+  $statusOk = $false
+  $statusError = ''
+  try {
+    $statusRaw = @(& git -C $Root status --porcelain -uall 2>&1)
+    $gitExit = $LASTEXITCODE
+    if ($gitExit -eq 0) {
+      $status = (@($statusRaw | ForEach-Object { [string]$_ }) -join "`n")
+      $statusOk = $true
+    } else {
+      $statusError = 'native-git-exit=' + $gitExit
+    }
+  } catch {
+    $statusError = 'git-exception: ' + $_.Exception.Message
+  }
+  $hashes = [ordered]@{}
+  $errors = [ordered]@{}
+  foreach ($rel in $ProtectedRel) {
+    $hashes[$rel] = ''
+    $errors[$rel] = ''
+    $p = Join-Path $Root $rel
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+      $hashes[$rel] = '(absent)'
+      continue
+    }
+    try {
+      $h = (Get-FileHash -LiteralPath $p -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+      if ($h -notmatch '^[0-9a-f]{64}$') { $errors[$rel] = 'non-64-hex hash [' + $h + ']' } else { $hashes[$rel] = $h }
+    } catch {
+      $errors[$rel] = 'hash-exception: ' + $_.Exception.Message
+    }
+  }
+  return [pscustomobject]@{ status = $status; statusOk = $statusOk; statusError = $statusError; hashes = $hashes; errors = $errors }
+}
+
+function Test-LoadorderWorktreePreservation($Before, $After) {
+  # The preservation guard itself: true ONLY if both git-status measurements ran
+  # with native exit 0, both protected-hash maps were fully measured (64-hex, no
+  # errors), no key is missing in either snapshot, and hashes/status are equal.
+  # Any measurement error or non-64-hex hash fails the guard (fail-closed).
+  $problems = @()
+  $hashDiffs = @()
+  if (-not $Before.statusOk) { $problems += ('before git status measurement failed: ' + [string]$Before.statusError) }
+  if (-not $After.statusOk) { $problems += ('after git status measurement failed: ' + [string]$After.statusError) }
+  $statusEqual = ([string]$Before.status -eq [string]$After.status)
+  if (-not $statusEqual) { $problems += 'git status changed between snapshots' }
+  foreach ($k in $Before.hashes.Keys) {
+    if (-not $After.hashes.Contains($k)) { $problems += ('after snapshot missing protected key: ' + $k); continue }
+    $b = [string]$Before.hashes[$k]
+    $a = [string]$After.hashes[$k]
+    $be = ''; $ae = ''
+    if ($Before.errors.Contains($k)) { $be = [string]$Before.errors[$k] }
+    if ($After.errors.Contains($k)) { $ae = [string]$After.errors[$k] }
+    if ($be -ne '') { $problems += ('before hash measurement failed for ' + $k + ': ' + $be) }
+    if ($ae -ne '') { $problems += ('after hash measurement failed for ' + $k + ': ' + $ae) }
+    if ($b -notmatch '^[0-9a-f]{64}$') { $problems += ('before hash not 64-hex for ' + $k + ': [' + $b + ']') }
+    if ($a -notmatch '^[0-9a-f]{64}$') { $problems += ('after hash not 64-hex for ' + $k + ': [' + $a + ']') }
+    if ($b -ne $a) { $hashDiffs += ($k + ' (' + $b + ' -> ' + $a + ')') }
+  }
+  foreach ($k in $After.hashes.Keys) {
+    if (-not $Before.hashes.Contains($k)) { $problems += ('before snapshot missing protected key: ' + $k) }
+  }
+  if ($hashDiffs.Count -gt 0) { $problems += ('hash differences: ' + ($hashDiffs -join ', ')) }
+  return [pscustomobject]@{ statusEqual = $statusEqual; hashDiffs = $hashDiffs; problems = $problems; ok = ($problems.Count -eq 0) }
+}
+
+# The protected set: the product scripts this runner drives plus the runner itself.
+$script:protectedRel = @(
+  'tools\susemi_installer.ps1',
+  'tools\susemi_transaction.ps1',
+  'tools\susemi_stage_helpers.ps1',
+  'Install_OptiScaler_windows.bat',
+  'tests\installer_fixtures\loadorder\run_loadorder_qa.ps1'
+)
+# Capture the EXACT starting state BEFORE any fixture extraction or scenario runs,
+# so z-worktree compares real before/after snapshots instead of a stale git shape.
+$script:wtBefore = Get-LoadorderWorktreeSnapshot $PackageRoot $script:protectedRel
+
 # --------------------------------------------------------------- fixtures ---
 
 # Extract the pinned payloads once (read-only source; no network).
@@ -626,15 +709,38 @@ $defaultAfter = @(Get-ChildItem -LiteralPath $defaultJournalRoot -File -ErrorAct
 $scratchRemoved = $false
 try { Remove-Item -LiteralPath $ScratchRoot -Recurse -Force -ErrorAction Stop; $scratchRemoved = $true } catch { Write-Host ('cleanup: ' + $_.Exception.Message) }
 
-# dirty-worktree receipt (tracked-file modifications only; untracked is expected).
-$gitOut = ''
-try { $gitOut = (git -C $PackageRoot status --porcelain -uall) -join "`n" } catch { $gitOut = 'git-unavailable' }
-Set-Content -LiteralPath (Join-Path $rawDir 'worktree-final.txt') -Value $gitOut -Encoding UTF8
-$trackedMod = @(([string]$gitOut -split "`r?`n") | Where-Object { $_ -match '^\s?M\s' -or $_ -match '^M' })
-$trackedModNames = @($trackedMod | ForEach-Object { ($_ -replace '^\s*M\s+', '').Trim() })
+# Preservation receipt: compare the complete git status + protected file hashes
+# captured before the run with the same measurements after every runner action.
+$script:wtAfter = Get-LoadorderWorktreeSnapshot $PackageRoot $script:protectedRel
+$pres = Test-LoadorderWorktreePreservation $script:wtBefore $script:wtAfter
+Set-Content -LiteralPath (Join-Path $rawDir 'worktree-initial.txt') -Value ([string]$script:wtBefore.status) -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $rawDir 'worktree-final.txt') -Value ([string]$script:wtAfter.status) -Encoding UTF8
+$presTxt = New-Object System.Collections.ArrayList
+[void]$presTxt.Add('before-status-ok=' + $script:wtBefore.statusOk)
+[void]$presTxt.Add('after-status-ok=' + $script:wtAfter.statusOk)
+[void]$presTxt.Add('before-status-error=[' + [string]$script:wtBefore.statusError + ']')
+[void]$presTxt.Add('after-status-error=[' + [string]$script:wtAfter.statusError + ']')
+[void]$presTxt.Add('status-equal=' + $pres.statusEqual)
+[void]$presTxt.Add('guard-ok=' + $pres.ok)
+foreach ($rel in $script:protectedRel) {
+  [void]$presTxt.Add($rel + ' before=' + [string]$script:wtBefore.hashes[$rel] + ' after=' + [string]$script:wtAfter.hashes[$rel] + ' before-error=[' + [string]$script:wtBefore.errors[$rel] + '] after-error=[' + [string]$script:wtAfter.errors[$rel] + ']')
+}
+[void]$presTxt.Add('problems=' + ($pres.problems -join ' | '))
+Set-Content -LiteralPath (Join-Path $rawDir 'worktree-preservation.txt') -Value ($presTxt -join "`r`n") -Encoding UTF8
+
+# z-worktree: the runner must leave the source tree and every protected source
+# file exactly as it found them. The old case hardcoded a T5/T7-era dirty shape
+# (one setup_windows.bat modification, coordinator untracked); that shape no
+# longer exists, so this asserts the real before/after invariant instead. A
+# failed git status or hash measurement is rejected, never treated as a pass.
 Start-Case 'z-worktree'
-Assert ($trackedModNames.Count -eq 1 -and $trackedModNames[0] -eq 'setup_windows.bat') ('tracked modifications are exactly the pre-existing T5 setup_windows.bat (got: ' + ($trackedModNames -join ',') + ')')
-Assert ($gitOut -match 'tools/susemi_installer\.ps1') 'installer present as untracked work'
+Assert ($script:wtBefore.statusOk -and $script:wtAfter.statusOk) ('both git status measurements succeeded with native exit 0 (before-error=[' + [string]$script:wtBefore.statusError + '] after-error=[' + [string]$script:wtAfter.statusError + '])')
+$unmeasured = @($script:protectedRel | Where-Object { ([string]$script:wtBefore.hashes[$_] -notmatch '^[0-9a-f]{64}$') -or ([string]$script:wtAfter.hashes[$_] -notmatch '^[0-9a-f]{64}$') -or ([string]$script:wtBefore.errors[$_] -ne '') -or ([string]$script:wtAfter.errors[$_] -ne '') })
+Assert ($unmeasured.Count -eq 0) ('every protected file hash was measured (64-hex, no errors) in both snapshots (unmeasured: ' + ($unmeasured -join ',') + ')')
+$beforeLines = @([string]$script:wtBefore.status -split "`n" | Where-Object { $_ -ne '' })
+$afterLines = @([string]$script:wtAfter.status -split "`n" | Where-Object { $_ -ne '' })
+Assert ($pres.statusEqual) ('complete git status byte-identical before vs after the run (lines before=' + $beforeLines.Count + ' after=' + $afterLines.Count + ')')
+Assert ($pres.ok) ('preservation guard holds (no measurement errors; hashes/status unchanged): ' + ($pres.problems -join '; '))
 End-Case
 
 Write-Host ''
