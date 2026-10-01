@@ -11,7 +11,7 @@
 Korean UI + MFG unlock + 20/30-series FG bundle. Grab the latest below.
 
 [![Latest release](https://img.shields.io/badge/Download-latest-green?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)
-[![One-click installer](https://img.shields.io/badge/One--click-Installer-blueviolet?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1)
+[![One-click installer](https://img.shields.io/badge/One--click-Installer-blueviolet?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a2)
 [![Total downloads](https://img.shields.io/github/downloads/grim-susemi/OptiScaler-Susemi/total?style=for-the-badge&logo=github&logoColor=white&label=Total%20downloads)](https://github.com/grim-susemi/OptiScaler-Susemi/releases)
 
 </div>
@@ -21,10 +21,11 @@ Korean UI + MFG unlock + 20/30-series FG bundle. Grab the latest below.
 
 ## <a id="susemi-oneclick"></a>One-click installer (recommended)
 
-Running `Install_OptiScaler_windows.bat` is all it takes. Pick the game EXE, watch the progress, check the preview, consent. Done.
-Removal is safe too: it removes only what it installed, and existing ReShade settings are left untouched.
-The NR model (`nvngx_dlssnr.dll`) stays user-supplied.
-The unified guide ships in the same package: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md). The bat ships with the one-click installer release, [v11.3-installer-a1](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1), see [Download](#susemi-download).
+Extract the complete installer ZIP into its own folder, close the game, then run `Install_OptiScaler_windows.bat`. Pick the actual x64 game EXE, read the diagnosis and preview, consent, then check the result.
+The a2 installer verifies core/UAL plus nine bundled Intel/AMD/DirectX DLLs. It keeps the existing core; it isn't stable-core promotion or proof of working FG.
+Removal checks the install record and preserves user changes; conflicts stop it rather than forcing deletion. ReShade configuration changes need separate consent and an eligible installer-owned INI.
+NVIDIA DLSS/FG/NR/Streamline binaries and models aren't bundled or automatically acquired by this installer. The NR model (`nvngx_dlssnr.dll`) and ReShade stay user-supplied.
+The unified guide ships in the same package: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md). The bat ships with the one-click installer release, [v11.3-installer-a2](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a2), see [Download](#susemi-download).
 
 ## <a id="susemi-diff"></a>What's changed in this fork
 
@@ -38,7 +39,7 @@ The unified guide ships in the same package: [INSTALL-ONECLICK.md](INSTALL-ONECL
 
 - Recommended: [latest release page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) — points at the newest stable (currently v11.1)
 - Latest prerelease: [v11.2-rc2](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc2). Candidate scope and limits are in [`docs/RELEASE-v11.2-rc2.md`](docs/RELEASE-v11.2-rc2.md).
-- One-click installer: [v11.3-installer-a1 release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a1) — one unified ZIP for all languages; guide: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md)
+- One-click installer: [v11.3-installer-a2 release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a2), one unified ZIP for all languages; guide: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md)
 
 ## <a id="susemi-install"></a>Install
 

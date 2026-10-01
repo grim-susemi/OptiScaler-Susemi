@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Slim one-click installer repack from the reviewed rc2 ZIP.
 
-Builds a slim local candidate identity (default version tag ``v11.3-installer-a1``)
+Builds the slim installer identity (default version tag ``v11.3-installer-a2``)
 by taking every rc2 ZIP member byte-exact EXCEPT those in the explicit DELETE
-list, regenerating ``SHA256SUMS.txt`` and a regenerated
-``NEW-CANDIDATE-MANIFEST.md`` with slim provenance.
+list and regenerating ``SHA256SUMS.txt``. Internal QA provenance stays outside
+the user-facing ZIP.
 
 This recipe never publishes anything. It refuses the rc2 identity (rc2 is only
-reproducible through ``tools/repack_rc2.py``) and writes only a local ZIP.
+reproducible through ``tools/repack_rc2.py``) and writes only a local ZIP plus the
+adjacent one-line release ``SHA256SUMS.txt`` (the ZIP's own digest).
 
 Determinism: kept members keep their original ZipInfo (including ``date_time``);
 new / regenerated members use a fixed timestamp, so two runs with identical
 inputs produce a byte-identical output ZIP. Any drift in an addition input
 between runs changes the recorded per-member SHA and the output ZIP hash.
 
-Machine-readable stdout lines: input-sha=/output-sha=/members=/removed=/kept=.
+Machine-readable stdout lines: input-sha=/output-sha=/sums-out=/sums-sha=/members=/removed=/kept=.
 Exit 0 ok / 1 refused / 2 invalid invocation.
 """
 import argparse
@@ -38,16 +39,16 @@ CORE_SHA = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
 UAL_MEMBER = 'tools/asi-loader/Ultimate-ASI-Loader-x64.dll'
 UAL_SHA = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
 
-VERSION = 'v11.3-installer-a1'
+VERSION = 'v11.3-installer-a2'
 OUT_NAME = 'OptiScaler-NR-' + VERSION + '.zip'
 
 MANIFEST = 'SHA256SUMS.txt'
-CANDIDATE_MANIFEST = 'NEW-CANDIDATE-MANIFEST.md'
 
 # Explicitly deleted from the package (owner decision 2026-09-28).
 # NOTE: setup_windows.bat is NOT here — susemi_installer.ps1 invokes
 #   it at `--orchestrated` install time to rename OptiScaler.dll → .asi.
 DELETED = {
+    '!! EXTRACT ALL FILES TO GAME FOLDER !!',
     'setup_linux.sh',
     'Install_AsiLoader_windows.bat',
     'Streamline_fetcher_windows.bat',
@@ -103,7 +104,7 @@ SLIM_WORKTREE_REPLACEMENTS = (
 )
 
 # Regenerated members: content comes from base ZIP, overwritten with new hash set.
-REGENERATED = (MANIFEST, CANDIDATE_MANIFEST)
+REGENERATED = (MANIFEST,)
 
 # Forbidden path fragments (internal tests/evidence).
 FORBIDDEN_PATH = ('.omo', 'evidence/', 'journal/', 'tests/')
@@ -185,34 +186,6 @@ def read_inputs(root):
     return blobs, shas
 
 
-def candidate_manifest(base_digest, shas, members, slim_note=''):
-    """Generate NEW-CANDIDATE-MANIFEST.md for the slim variant."""
-    lines = [
-        '# NEW-CANDIDATE-MANIFEST', '',
-        'Local A-only slim one-click installer candidate repacked from a byte-pinned rc2 ZIP.', '',
-        '- base-zip: ' + BASE_NAME,
-        '- base-sha256: ' + base_digest,
-        '- candidate-version: ' + VERSION,
-        '- candidate-zip: ' + OUT_NAME,
-        '- members: ' + str(members),
-        '- core-dll-pin: ' + CORE_MEMBER + ' ' + CORE_SHA,
-        '- ual-pin: ' + UAL_MEMBER + ' ' + UAL_SHA, '',
-        '## Provenance', '',
-        'LOCAL CANDIDATE, NOT PUBLISHED. The version tag is a local placeholder.',
-        'Any commit, push, tag, release or announcement requires separate,',
-        'explicit owner approval. This file is not a release receipt.', '',
-        '- slim-note: ' + slim_note,
-        '',
-        '## Deleted-member set', '',
-        '| member | reason |',
-        '| --- | --- |',
-    ]
-    for del_member in sorted(DELETED):
-        lines.append('| ' + del_member + ' | owner decision 2026-09-28 — legacy scripts/docs removed |')
-    lines.append('')
-    return ('\n'.join(lines)).encode('utf-8')
-
-
 def run(base, root, out):
     check(base.is_file(), 'missing base ZIP')
     digest = file_sha(base)
@@ -264,19 +237,15 @@ def run(base, root, out):
             output_set.add(n)
 
     # Add newly-created / regenerated members AFTER base members.
-    generated_appends = [MANIFEST] + list(SLIM_WORKTREE_INPUTS) + [CANDIDATE_MANIFEST]
+    generated_appends = [MANIFEST] + list(SLIM_WORKTREE_INPUTS)
     for rel in generated_appends:
         check(rel not in output_set, 'generated file already in base: ' + rel)
         output_order.append(rel)
         output_set.add(rel)
 
-    # Regenerate candidate manifest (cannot reference its own SHA).
-    slim_note = ('slim one-click package; legacy scripts/docs removed by owner decision 2026-09-28')
-    new[CANDIDATE_MANIFEST] = candidate_manifest(digest, shas, len(output_order), slim_note)
-
     output_names = output_order
     members = len(output_names)
-    expected_members = BASE_MEMBERS - len(DELETED) + len(SLIM_WORKTREE_INPUTS) + 1
+    expected_members = BASE_MEMBERS - len(DELETED) + len(SLIM_WORKTREE_INPUTS)
     check(members == expected_members,
           'member count mismatch: expected ' + str(expected_members) + ' got ' + str(members))
 
@@ -313,13 +282,12 @@ def run(base, root, out):
                 if fname not in new:
                     continue
                 # Skip all non-base members — they get their own ZipInfo below.
-                if fname in (MANIFEST,) or fname in SLIM_WORKTREE_INPUTS \
-                   or fname == CANDIDATE_MANIFEST:
+                if fname in (MANIFEST,) or fname in SLIM_WORKTREE_INPUTS:
                     continue
                 entry = copy.copy(info)
                 z.writestr(entry, new[entry.filename])
             # All generated/new members in output_names order.
-            for rel in (MANIFEST,) + SLIM_WORKTREE_INPUTS + (CANDIDATE_MANIFEST,):
+            for rel in (MANIFEST,) + SLIM_WORKTREE_INPUTS:
                 entry = zipfile.ZipInfo(rel, date_time=FIXED_TS)
                 entry.create_system = 0
                 entry.external_attr = FIXED_ATTR
@@ -341,7 +309,14 @@ def run(base, root, out):
         if temp is not None:
             temp.unlink(missing_ok=True)
 
+    sums_path = out.with_name(MANIFEST)
+    sums_data = (out_digest + ' *' + out.name + '\n').encode('ascii')
+    sums_path.write_bytes(sums_data)
+    check(file_sha(sums_path) == sha(sums_data), 'sums write mismatch')
+
     print('input-sha=' + digest)
+    print('sums-out=' + str(sums_path))
+    print('sums-sha=' + sha(sums_data))
     print('output-sha=' + out_digest)
     print('members=' + str(members))
     print('removed=' + str(len(DELETED)))
