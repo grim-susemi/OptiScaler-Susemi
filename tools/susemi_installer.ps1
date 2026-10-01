@@ -762,14 +762,59 @@ function Get-LaterOverrideInfo {
 
 function Test-PackageSatisfied {
   param([string]$GameDir, [string]$Route, [string]$ProxyName)
-  $t = Join-Path $GameDir 'OptiScaler.asi'
-  if ($Route -eq 'proxy' -and -not [string]::IsNullOrEmpty($ProxyName)) { $t = Join-Path $GameDir $ProxyName }
-  $u = Join-Path $GameDir 'winmm.dll'
-  if (-not (Test-Path -LiteralPath $t -PathType Leaf)) { return $false }
-  if ((Get-FileSha256 $t) -ne $CoreSha) { return $false }
-  if (-not (Test-Path -LiteralPath $u -PathType Leaf)) { return $false }
-  if ((Get-FileSha256 $u) -ne $UalSha) { return $false }
-  return $true
+  return ((Get-PayloadVerification $GameDir $Route $ProxyName).verified -eq 11)
+}
+
+function Test-OrdinaryPayloadPath {
+  param([string]$Path)
+  $cursor = [IO.Path]::GetFullPath($Path); $leaf = $true; $exists = $false
+  while ($cursor) {
+    $attributes = $null
+    try { $attributes = [IO.File]::GetAttributes($cursor) }
+    catch {
+      $errorObject = $_.Exception
+      while ($errorObject.InnerException) { $errorObject = $errorObject.InnerException }
+      if (-not ($errorObject -is [IO.FileNotFoundException] -or $errorObject -is [IO.DirectoryNotFoundException])) { throw 'payload-path-unreadable' }
+    }
+    if ($null -ne $attributes) {
+      if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'payload-path-reparse' }
+      $isDir = [bool]($attributes -band [IO.FileAttributes]::Directory)
+      if ((-not $leaf -and -not $isDir) -or ($leaf -and $isDir)) { throw 'payload-path-not-ordinary' }
+      if ($isDir) {
+        try { $null = [IO.Directory]::GetFileSystemEntries($cursor) }
+        catch { throw 'payload-path-unreadable' }
+      }
+      if ($leaf) { $exists = $true }
+    }
+    $cursor = [IO.Path]::GetDirectoryName($cursor); $leaf = $false
+  }
+  return $exists
+}
+
+function Get-PayloadVerification {
+  param([string]$GameDir, [string]$Route, [string]$ProxyName)
+  $core = 'OptiScaler.asi'
+  if ($Route -eq 'proxy') { $core = $ProxyName }
+  $pins = [ordered]@{ $core=$CoreSha; 'winmm.dll'=$UalSha }
+  foreach ($name in $ResourcePins.Keys) { $pins[$name] = $ResourcePins[$name] }
+  $verified = 0; $resources = 0
+  foreach ($name in $pins.Keys) {
+    $path = Join-Path $GameDir $name
+    try {
+      if ((Test-OrdinaryPayloadPath $path) -and (Get-FileSha256 $path) -eq $pins[$name]) {
+        $verified++; if ($ResourcePins.Contains($name)) { $resources++ }
+      }
+    } catch { }
+  }
+  return @{ verified=$verified; resources=$resources }
+}
+
+function Write-PayloadEvidence {
+  param([string]$GameDir, [string]$Route, [string]$ProxyName)
+  $v = Get-PayloadVerification $GameDir $Route $ProxyName
+  $status = if ($v.verified -eq 11) { 'verified' } else { 'UNVERIFIED' }
+  Write-Output ('setup_payloads={0} setup_expected=11 setup_verified={1} resources_expected=9 resources_verified={2}' -f $status,$v.verified,$v.resources)
+  Write-Output 'game_load_order=UNVERIFIED fg_runtime=UNVERIFIED'
 }
 
 function Test-GuidedInstallEligible {
@@ -970,7 +1015,19 @@ $CoreEntryName = 'OptiScaler.dll'
 $CoreSha       = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
 $UalStagedRel  = 'tools\asi-loader\Ultimate-ASI-Loader-x64.dll'
 $UalSha        = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
+$ResourcePins = [ordered]@{
+  'OptiScaler/amd_fidelityfx_framegeneration_dx12.dll' = '02297beedd285e822d3a64f314cf00faf378dcec0edc47ff0c4dd71b3a8c2f18'
+  'OptiScaler/amd_fidelityfx_loader_dx12.dll' = 'e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa'
+  'OptiScaler/amd_fidelityfx_upscaler_dx12.dll' = 'd0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46'
+  'OptiScaler/amd_fidelityfx_vk.dll' = 'a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78'
+  'OptiScaler/D3D12_OptiScaler/D3D12Core.dll' = '07d286c306f8117321422affd9e6388c12d0fb4be1c7fc689d9e899324feeb24'
+  'OptiScaler/libxell.dll' = 'd2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7'
+  'OptiScaler/libxess.dll' = '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7'
+  'OptiScaler/libxess_dx11.dll' = 'c7cfe86f0c9d94e4fb3696d3cd5035e2bbb6a8b1b0572f8b7395a4cdfd0c625e'
+  'OptiScaler/libxess_fg.dll' = 'ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27'
+}
 $TxTimeoutSec  = 120
+$script:UnreapedOwnedChild = $false
 
 function Get-FileSha256 {
   param([string]$Path)
@@ -993,7 +1050,7 @@ function Invoke-ChildProcess {
     $EnvVars,
     [int]$TimeoutSec = 120
   )
-  $res = [ordered]@{ exit = -1; timedOut = $false; stdout = ''; stderr = '' }
+  $res = [ordered]@{ exit = -1; timedOut = $false; reaped = $false; stdout = ''; stderr = '' }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $FileName
   if (-not [string]::IsNullOrEmpty($RawArguments)) {
@@ -1009,8 +1066,10 @@ function Invoke-ChildProcess {
   if ($EnvVars) { foreach ($k in $EnvVars.Keys) { $psi.EnvironmentVariables[[string]$k] = [string]$EnvVars[$k] } }
   $p = New-Object System.Diagnostics.Process
   $p.StartInfo = $psi
+  $started = $false
   try {
     $null = $p.Start()
+    $started = $true
     $outTask = $p.StandardOutput.ReadToEndAsync()
     $errTask = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($TimeoutSec * 1000)) {
@@ -1018,13 +1077,19 @@ function Invoke-ChildProcess {
       try { $p.Kill() } catch { }
       try { $null = $p.WaitForExit(5000) } catch { }
     }
-    try { $null = $p.WaitForExit(5000) } catch { }
-    try { $res.exit = [int]$p.ExitCode } catch { $res.exit = -1 }
-    try { $res.stdout = [string]$outTask.Result } catch { }
-    try { $res.stderr = [string]$errTask.Result } catch { }
+    try { $res.reaped = [bool]$p.WaitForExit(5000) } catch { }
+    if ($res.reaped) {
+      $res.exit = [int]$p.ExitCode
+      $res.stdout = [string]$outTask.Result
+      $res.stderr = [string]$errTask.Result
+    } else {
+      $script:UnreapedOwnedChild = $true
+      $res.stderr = 'Owned child exit is unconfirmed; staging must be retained.'
+    }
   } catch {
     $res.stderr = [string]$_.Exception.Message
   } finally {
+    if ($started -and -not $res.reaped) { $script:UnreapedOwnedChild = $true }
     try { $p.Dispose() } catch { }
   }
   return $res
@@ -1313,17 +1378,8 @@ function Invoke-InstallTransaction {
       Write-Output ('preview| convert=' + $rfConvertName + '->ReShade.asi mode=copy sha=' + $rfConvertSha)
       Write-Output ($M.ConvertWarn -f $rfConvertName)
     }
-    # Nothing to install and nothing to write: report honestly without touching a byte.
-    if (($rfIniAction -eq 'noop' -or $rfIniAction -eq 'skip-later-override') -and (Test-PackageSatisfied -GameDir $gameDir -Route $Route -ProxyName $ProxyName)) {
-      if ($rfIniAction -eq 'skip-later-override') {
-        Write-Output ('reshade-first=later-override file=' + $rfLaterPre.file + ' key=loadextraplugins value=' + $rfLaterPre.value)
-        Write-StatusLine -Status 'installed-with-warning' -Reason 'later-override' -Human ($M.IniLaterOverride -f $rfLaterPre.file, $rfLaterPre.value)
-      } else {
-        Write-Output ('reshade-first=no-op reason=already-configured ini=' + $rfIniPath + ' owned=' + $rfIniOwned)
-        Write-StatusLine -Status 'no-op' -Reason 'already-configured' -Human $M.IniNoOp
-      }
-      return 0
-    }
+    # Complete package inputs and live resources must be verified even for a
+    # configured no-op. The transaction below decides whether anything changes.
   }
 
   $zipPath = $env:SUSEMI_RC2_ZIP
@@ -1333,13 +1389,21 @@ function Invoke-InstallTransaction {
     Write-Output ('trace| source=directory root=' + $packageRoot)
     $packageCore = Join-Path $packageRoot $CoreEntryName
     $packageUal = Join-Path $packageRoot $UalStagedRel
-    foreach ($payload in @($packageCore, $packageUal)) {
-      if (-not (Test-Path -LiteralPath $payload)) {
-        Write-StatusLine -Status 'refused' -Reason 'package-payload-missing' -Human $M.PackagePayloadMissing
-        return 1
+    $packagePins = [ordered]@{ $CoreEntryName=$CoreSha; $UalStagedRel=$UalSha }
+    foreach ($name in $ResourcePins.Keys) { $packagePins[$name] = $ResourcePins[$name] }
+    try {
+      foreach ($name in $packagePins.Keys) {
+        $payload = Join-Path $packageRoot $name
+        if (-not (Test-OrdinaryPayloadPath $payload)) {
+          Write-StatusLine -Status 'refused' -Reason 'package-payload-missing' -Human $M.PackagePayloadMissing
+          return 1
+        }
+        if ((Get-FileSha256 $payload) -ne $packagePins[$name]) {
+          Write-StatusLine -Status 'refused' -Reason 'package-payload-sha-mismatch' -Human $M.PackagePayloadMismatch
+          return 1
+        }
       }
-    }
-    if ((Get-FileSha256 $packageCore) -ne $CoreSha -or (Get-FileSha256 $packageUal) -ne $UalSha) {
+    } catch {
       Write-StatusLine -Status 'refused' -Reason 'package-payload-sha-mismatch' -Human $M.PackagePayloadMismatch
       return 1
     }
@@ -1415,6 +1479,39 @@ function Invoke-InstallTransaction {
     }
     Write-Output ('trace| staged-core-sha=' + (Get-FileSha256 $coreDll) + ' staged-ual-sha=' + (Get-FileSha256 $ualStaged))
 
+    # All nine bundled resources are staged by the exact allowlist helper.
+    # An explicit ZIP is passed explicitly, with no directory/network fallback.
+    $helper = Join-Path $PSScriptRoot 'susemi_stage_helpers.ps1'
+    $resourceArgs = @('resources', '-StageDir', $stageDir)
+    if (-not $directorySource) { $resourceArgs += @('-Rc2Zip', $zipPath) }
+    $resourceRes = Invoke-PsChild -ScriptPath $helper -ChildArgs $resourceArgs -TimeoutSec $TxTimeoutSec
+    Write-TxOutput -Res $resourceRes
+    if ($resourceRes.timedOut -or $resourceRes.exit -ne 0 -or -not $resourceRes.reaped) {
+      $rs = Get-MachineStatus $resourceRes.stdout
+      $reason = $rs.reason; if ($reason -eq '') { $reason = 'resource-stage-failed' }
+      Write-StatusLine 'refused' $reason 'Complete bundled resource staging failed; no game or journal writes were requested.'
+      return 1
+    }
+    $metadata = @($resourceRes.stdout -split "`r?`n" | Where-Object { $_.StartsWith('resource_ops_json=') })
+    $resourceOps = $null
+    try { if ($metadata.Count -eq 1) { $resourceOps = $metadata[0].Substring(18) | ConvertFrom-Json } } catch { }
+    if (@($resourceOps).Count -ne 9) {
+      Write-StatusLine 'refused' 'resource-stage-metadata-invalid' 'The helper did not return the exact nine-resource set.'
+      return 1
+    }
+    $seen = @{}
+    foreach ($resource in $resourceOps) {
+      $relative = [string]$resource.relative
+      if (-not $ResourcePins.Contains($relative) -or $seen.ContainsKey($relative) -or
+          $resource.sha256 -ne $ResourcePins[$relative] -or -not $resource.resource -or
+          [string]$resource.source -ne [IO.Path]::GetFullPath((Join-Path $stageDir $relative)) -or
+          -not (Test-OrdinaryPayloadPath $resource.source) -or (Get-FileSha256 $resource.source) -ne $ResourcePins[$relative]) {
+        Write-StatusLine 'refused' 'resource-stage-metadata-invalid' 'Resource metadata or staged pin does not match the trusted complete set.'
+        return 1
+      }
+      $seen[$relative] = $true
+    }
+
     # (4) place the core under its owned final name via the T5 orchestrated staging path.
     $bat = Join-Path (Split-Path -Parent $PSScriptRoot) 'setup_windows.bat'
     $inner = '"' + $bat + '" --orchestrated ' + $Route
@@ -1444,6 +1541,10 @@ function Invoke-InstallTransaction {
     # COPY first, then the byte-preserving winmm.ini extend/create. Both are plain
     # create/replace ops, so the existing prepare/apply/recover/rollback cover them.
     $extraOps = @()
+    foreach ($resource in $resourceOps) {
+      $extraOps += @{ target=(Join-Path $gameDir ([string]$resource.relative)); source=[string]$resource.source;
+                     sha256=[string]$resource.sha256; resource=$true }
+    }
     if ($rfConvertSrc -ne '') {
       $convStage = Join-Path $stageDir 'ReShade.asi'
       Copy-Item -LiteralPath $rfConvertSrc -Destination $convStage -Force -ErrorAction Stop
@@ -1481,6 +1582,29 @@ function Invoke-InstallTransaction {
       return 1
     }
     $planSt = Get-MachineStatus -Text $planRes.stdout
+    if ($planRes.exit -eq 0 -and $planSt.status -eq 'no-op') {
+      if (-not (Test-PackageSatisfied $gameDir $Route $ProxyName)) {
+        Write-StatusLine 'refused' 'verify-failed' 'The complete live set changed during no-op validation.'
+        return 1
+      }
+      Write-PayloadEvidence $gameDir $Route $ProxyName
+      $postCtx = Get-DiagnosisContext -Exe $rawExe -Lang $Lang -M $M
+      Write-Output ('static-config| loadplugins=' + $postCtx.effLoadPlugins + ' source=' + $postCtx.srcLoadPlugins + ' scripts-only=' + $postCtx.effScriptsOnly + ' extra-source=' + $postCtx.srcExtra)
+      Write-Output 'game-runtime=unverified'
+      if ($postCtx.configReason -ne '' -or [uint32]$postCtx.effLoadPlugins -eq 0 -or
+          ([uint32]$postCtx.effScriptsOnly -ne 0 -and $postCtx.effList -notcontains 'OptiScaler.asi')) {
+        Write-StatusLine 'installed-with-warning' 'ual-config-changed' 'Existing payload bytes verified; static configuration changed or remains unverified.'
+      } elseif ($ReshadeFirst -and (Get-LaterOverrideInfo $postCtx).present) {
+        $later = Get-LaterOverrideInfo $postCtx
+        Write-StatusLine 'installed-with-warning' 'later-override' ($M.IniLaterOverride -f $later.file,$later.value)
+      } elseif ($ReshadeFirst) {
+        Write-Output ('reshade-first=no-op reason=already-configured ini=' + $rfIniPath + ' owned=' + $rfIniOwned)
+        Write-StatusLine 'no-op' 'already-configured' $M.IniNoOp
+      } else {
+        Write-StatusLine 'no-op' 'already-installed' 'All eleven payloads already match; no new journal or ownership.'
+      }
+      return 0
+    }
     if ($planRes.exit -ne 0 -or $planSt.status -ne 'planned') {
       $pr = $planSt.reason; if ([string]::IsNullOrEmpty($pr)) { $pr = 'plan-failed' }
       Write-StatusLine -Status 'refused' -Reason $pr -Human 'install: transaction plan refused; nothing was written.'
@@ -1503,7 +1627,12 @@ function Invoke-InstallTransaction {
       $ps2 = Get-MachineStatus -Text $prepRes.stdout
       $pr2 = $ps2.reason; if ([string]::IsNullOrEmpty($pr2)) { $pr2 = 'prepare-failed' }
       if ($prepRes.timedOut) { $pr2 = 'transaction-timeout' }
-      Write-StatusLine -Status 'failed' -Reason $pr2 -Human ("{0} journal={1}" -f $M.InstallFailed, $journalPath)
+      $rs = Get-MachineStatus $recRes.stdout
+      if ($recRes.reaped -and -not $recRes.timedOut -and $recRes.exit -eq 0 -and $rs.status -in @('recovered','already-recovered')) {
+        Write-StatusLine -Status 'failed' -Reason $pr2 -Human ("{0} journal={1}" -f $M.InstallFailed, $journalPath)
+      } else {
+        Write-StatusLine 'recovery-required' 'recovery-incomplete' ('Recovery was not confirmed; bytes and journal are preserved. journal=' + $journalPath)
+      }
       return 1
     }
 
@@ -1518,7 +1647,12 @@ function Invoke-InstallTransaction {
       $as2 = Get-MachineStatus -Text $appRes.stdout
       $ar2 = $as2.reason; if ([string]::IsNullOrEmpty($ar2)) { $ar2 = 'apply-failed' }
       if ($appRes.timedOut) { $ar2 = 'transaction-timeout' }
-      Write-StatusLine -Status 'failed' -Reason $ar2 -Human ("{0} journal={1}" -f $M.InstallFailed, $journalPath)
+      $rs = Get-MachineStatus $recRes.stdout
+      if ($recRes.reaped -and -not $recRes.timedOut -and $recRes.exit -eq 0 -and $rs.status -in @('recovered','already-recovered')) {
+        Write-StatusLine -Status 'failed' -Reason $ar2 -Human ("{0} journal={1}" -f $M.InstallFailed, $journalPath)
+      } else {
+        Write-StatusLine 'recovery-required' 'recovery-incomplete' ('Recovery was not confirmed; bytes and journal are preserved. journal=' + $journalPath)
+      }
       return 1
     }
 
@@ -1527,11 +1661,13 @@ function Invoke-InstallTransaction {
     $targetUal = Join-Path $gameDir 'winmm.dll'
     $okOpti = (Test-Path -LiteralPath $targetOpti -PathType Leaf) -and ((Get-FileSha256 $targetOpti) -eq $CoreSha)
     $okUal = (Test-Path -LiteralPath $targetUal -PathType Leaf) -and ((Get-FileSha256 $targetUal) -eq $UalSha)
-    $jPhase = ''; $jTx = ''
+    $payload = Get-PayloadVerification $gameDir $Route $ProxyName
+    $jPhase = ''; $jTx = ''; $okJournal = $false
     try {
       $j = (Get-Content -LiteralPath $journalPath -Raw) | ConvertFrom-Json
       $jPhase = [string]$j.phase
       $jTx = [string]$j.txid
+      $okJournal = [int]$j.schema_version -eq 2 -and @($j.ops | Where-Object { $_.state -ne 'applied' }).Count -eq 0
     } catch { }
     $okConv = $true; $okConvSrc = $true; $okIni = $true; $rfNewSha = ''
     if ($rfConvertSrc -ne '') {
@@ -1543,10 +1679,16 @@ function Invoke-InstallTransaction {
       $rfNewSha = Get-BytesSha $rfIniPlan.newBytes
       $okIni = (Test-Path -LiteralPath $rfIniPath -PathType Leaf) -and ((Get-FileSha256 $rfIniPath) -eq $rfNewSha)
     }
-    if (-not ($okOpti -and $okUal -and ($jPhase -eq 'applied') -and $okConv -and $okConvSrc -and $okIni)) {
+    if (-not ($okOpti -and $okUal -and $payload.verified -eq 11 -and $payload.resources -eq 9 -and
+        $okJournal -and ($jPhase -eq 'applied') -and $okConv -and $okConvSrc -and $okIni)) {
       $recRes = Invoke-PsChild -ScriptPath (Join-Path $PSScriptRoot 'susemi_transaction.ps1') -ChildArgs @('recover', '-Journal', $journalPath) -TimeoutSec $TxTimeoutSec
       Write-TxOutput -Res $recRes
-      Write-StatusLine -Status 'failed' -Reason 'verify-failed' -Human ("install verification failed (opti={0} ual={1} conv={2} ini={3} phase={4}); journal={5}" -f $okOpti, $okUal, $okConv, $okIni, $jPhase, $journalPath)
+      $rs = Get-MachineStatus $recRes.stdout
+      if ($recRes.reaped -and -not $recRes.timedOut -and $recRes.exit -eq 0 -and $rs.status -in @('recovered','already-recovered')) {
+        Write-StatusLine 'failed' 'verify-failed' ('Complete live-payload verification failed; current transaction recovery confirmed. journal=' + $journalPath)
+      } else {
+        Write-StatusLine 'recovery-required' 'recovery-incomplete' ('Complete verification failed and recovery was not confirmed. journal=' + $journalPath)
+      }
       return 1
     }
 
@@ -1561,6 +1703,7 @@ function Invoke-InstallTransaction {
       Write-Output 'reshade-first=no-op reason=already-configured'
     }
 
+    Write-PayloadEvidence $gameDir $Route $ProxyName
     $postCtx = Get-DiagnosisContext -Exe $rawExe -Lang $Lang -M $M
     Write-Output ('static-config| loadplugins=' + $postCtx.effLoadPlugins + ' source=' + $postCtx.srcLoadPlugins + ' scripts-only=' + $postCtx.effScriptsOnly + ' extra-source=' + $postCtx.srcExtra)
     Write-Output 'game-runtime=unverified'
@@ -1595,7 +1738,8 @@ function Invoke-InstallTransaction {
     }
     return 0
   } finally {
-    Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction SilentlyContinue
+    if ($script:UnreapedOwnedChild) { Write-Output ('trace| stage-retained reason=unreaped-owned-child path=' + $stageDir) }
+    else { Remove-Item -LiteralPath $stageDir -Recurse -Force -ErrorAction Stop }
   }
 }
 
@@ -1623,191 +1767,23 @@ function Invoke-RemoveTransaction {
   $gameDir = Split-Path -Parent $resolved
   $ko = (-not [string]::IsNullOrEmpty($lang)) -and ($lang -ne 'en')
 
-  # 1. Find newest journal matching this GameDir with phase applied or recovered.
-  $journalRoot = Get-JournalRoot
-  if (-not (Test-Path -LiteralPath $journalRoot -PathType Container)) {
-    $h = if ($ko) { '해당 게임 폴더에 설치 기록이 없습니다.' }
-         else     { 'No install record found for this game directory.' }
-    Write-StatusLine -Status 'missing-input' -Reason 'no-install-record' -Human $h
+  # The transaction engine owns schema validation, linked continuity, the whole
+  # undo preflight, newest-first reversal, and independent restored-byte checks.
+  $tx = Join-Path $PSScriptRoot 'susemi_transaction.ps1'
+  $removeRes = Invoke-PsChild -ScriptPath $tx -ChildArgs @('remove', '-GameDir', $gameDir, '-JournalRoot', (Get-JournalRoot)) -TimeoutSec $TxTimeoutSec
+  Write-TxOutput $removeRes
+  if ($removeRes.timedOut -or -not $removeRes.reaped) {
+    Write-StatusLine 'recovery-required' 'transaction-timeout' 'Removal child exit is unconfirmed; no completed removal is claimed.'
     return 1
   }
-
-  $jfiles = @(Get-ChildItem -LiteralPath $journalRoot -File -Filter '*.json' -ErrorAction SilentlyContinue) |
-            Sort-Object Name -Descending
-  if ($jfiles.Count -eq 0) {
-    $h = if ($ko) { '해당 게임 폴더에 설치 기록이 없습니다.' }
-         else     { 'No install record found for this game directory.' }
-    Write-StatusLine -Status 'missing-input' -Reason 'no-install-record' -Human $h
+  $result = Get-MachineStatus $removeRes.stdout
+  if ($result.status -eq '') {
+    Write-StatusLine 'failed' 'remove-failed' 'The transaction did not return a removal result.'
     return 1
   }
+  Write-StatusLine $result.status $result.reason 'Journal-driven removal validates the complete linked group and preserves foreign files/directories.'
+  return [int]$removeRes.exit
 
-  $matchedJournal = $null
-  foreach ($jf in $jfiles) {
-    $j = $null
-    try { $j = ((Get-Content -LiteralPath $jf.FullName -Raw) | ConvertFrom-Json) } catch { continue }
-    if ($null -eq $j) { continue }
-    $ph = [string]$j.phase
-    if ($ph -notin @('applied', 'recovered')) { continue }
-    $jd = ''; $gd = ''
-    try { $jd = [System.IO.Path]::GetFullPath([string]$j.game_dir) } catch { continue }
-    try { $gd = [System.IO.Path]::GetFullPath($gameDir)              } catch { continue }
-    if ($jd.Equals($gd, [StringComparison]::OrdinalIgnoreCase)) {
-      $matchedJournal = @{ path = $jf.FullName; data = $j }
-      break
-    }
-  }
-
-  if ($null -eq $matchedJournal) {
-    $h = if ($ko) { '해당 게임 폴더에 설치 기록이 없습니다.' }
-         else     { 'No install record found for this game directory.' }
-    Write-StatusLine -Status 'missing-input' -Reason 'no-install-record' -Human $h
-    return 1
-  }
-
-  $journalPath = $matchedJournal.path
-  $journalData = $matchedJournal.data
-
-  # 2. Idempotence: phase=recovered -> already removed.
-  if ($journalData.phase -eq 'recovered') {
-    # Check if files reappeared after removal.
-    $filesReappeared = $false
-    foreach ($op in @($journalData.ops)) {
-      if ($op.op -eq 'create' -and (Test-Path -LiteralPath $op.target)) {
-        $filesReappeared = $true; break
-      }
-      if ($op.op -eq 'replace' -and (Test-Path -LiteralPath $op.target)) {
-        $ts = Get-FileSha256 $op.target
-        if ($ts -ne $op.beforeSha) { $filesReappeared = $true; break }
-      }
-    }
-    if ($filesReappeared) {
-      $h = if ($ko) { '제거 후 대상 파일이 다시 나타났습니다. 삭제를 거부합니다.' }
-           else     { 'Target files reappeared after removal; refusing to delete.' }
-      Write-StatusLine -Status 'refused' -Reason 'reinstalled-since-removal' -Human $h
-      return 1
-    }
-    $h = if ($ko) { '이미 제거되었습니다. 작업이 없습니다.' }
-         else     { 'Already removed; nothing to do.' }
-    Write-StatusLine -Status 'no-op' -Reason 'already-removed' -Human $h
-    return 0
-  }
-
-  # 3. Consent: -Consent yes required (caller validates, but enforce here too).
-  #    The argument-mode handler ensures consent=yes before reaching here.
-  #    No-op enforcement is handled by the handler, not inside this function.
-
-  # 4. Full-group prevalidation BEFORE any mutation.
-  $valid = $true; $failReason = ''; $failDetail = ''
-
-  # schema_version must be known.
-  $sv = $null; try { $sv = [int]$journalData.schema_version } catch {}
-  if ($sv -ne 1) { $valid = $false; $failReason = 'journal-unknown'; $failDetail = 'unknown schema_version' }
-
-  if ($valid) {
-    $base = [System.IO.Path]::GetFullPath($gameDir).TrimEnd('\\').TrimEnd('/')
-    foreach ($op in @($journalData.ops)) {
-      $tgt = [string]$op.target
-      $full = ''; try { $full = [System.IO.Path]::GetFullPath($tgt) } catch { $valid=$false; $failReason='path-escape'; $failDetail=$tgt; break }
-      if ($full -ne $base -and $full.StartsWith($base+'\',[StringComparison]::OrdinalIgnoreCase)) {
-        # target is inside GameDir prefix → ok
-      } elseif ($full -ne $base) {
-        $valid = $false; $failReason = 'path-escape'; $failDetail = $tgt; break
-      }
-
-      if ($op.op -eq 'create') {
-        # sha == sourceSha (deletable) or absent (skip OK)
-        if (Test-Path -LiteralPath $op.target) {
-          $cs = Get-FileSha256 $op.target
-          if ($cs -ne $op.sourceSha) { $valid=$false; $failReason='target-changed'; $failDetail=$tgt; break }
-        }
-      } elseif ($op.op -eq 'replace') {
-        # rc1-era dangerous shape: hash-like field present but backup path empty/missing.
-        if ([string]::IsNullOrEmpty($op.backupPath)) {
-          $valid=$false; $failReason='backup-missing'; $failDetail=$tgt; break
-        }
-        # Backup must exist AND its sha == before.sha.
-        if (-not (Test-Path -LiteralPath $op.backupPath)) {
-          $valid=$false; $failReason='backup-missing'; $failDetail=$op.backupPath; break
-        }
-        $bsha = Get-FileSha256 $op.backupPath
-        if ($bsha -ne $op.beforeSha) {
-          $valid=$false; $failReason='backup-tampered'; $failDetail=$op.backupPath; break
-        }
-        # Current target sha == staged sha (restorable) OR == before.sha (already restored, skip).
-        if (Test-Path -LiteralPath $op.target) {
-          $tsha = Get-FileSha256 $op.target
-          if ($tsha -ne $op.sourceSha -and $tsha -ne $op.beforeSha) {
-            $valid=$false; $failReason='target-changed'; $failDetail=$tgt; break
-          }
-        }
-      }
-    }
-  }
-
-  if (-not $valid) {
-    $h = if ($ko) { ('거부 ({0}: {1}). 변경 사항이 없습니다.' -f $failReason,$failDetail) }
-         else     { ('Refused ({0}: {1}). Nothing was changed.' -f $failReason,$failDetail) }
-    Write-StatusLine -Status 'refused' -Reason $failReason -Human $h
-    return 1
-  }
-
-  # 5. Execute rollback via child-process transaction engine.
-  $psExe  = Get-PsExe
-  $script = Join-Path $PSScriptRoot 'susemi_transaction.ps1'
-  $allArgs = @('-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',$script,'rollback','-Journal',$journalPath)
-  $envVars = @{ SUSEMI_TX_JOURNAL_ROOT = $journalRoot }
-
-  $txRes = Invoke-ChildProcess -FileName $psExe -ArgList $allArgs -WorkDir '' -EnvVars $envVars -TimeoutSec $TxTimeoutSec
-  Write-TxOutput -Res $txRes
-
-  if ($txRes.timedOut) {
-    $h = if ($ko) { ('롤백이 {0}초 안에 끝나지 않아 중단했습니다.' -f $TxTimeoutSec) }
-         else     { ('Rollback timed out after {0}s; killed.' -f $TxTimeoutSec) }
-    Write-StatusLine -Status 'failed' -Reason 'transaction-timeout' -Human $h
-    return 1
-  }
-  if ($txRes.exit -ne 0) {
-    $h = if ($ko) { ('롤백 실패(종료코드={0}); 로그가 변경되지 않았습니다.' -f $txRes.exit) }
-         else     { ('Rollback failed (exit={0}); journal unchanged.' -f $txRes.exit) }
-    Write-StatusLine -Status 'failed' -Reason 'rollback-failed' -Human $h
-    return 1
-  }
-
-  # 6. Post-verify: replace ops target sha==before.sha; create ops target absent.
-  $postJ = $null
-  try { $postJ = ((Get-Content -LiteralPath $journalPath -Raw) | ConvertFrom-Json) } catch {}
-  $pOk = $true
-  if ($null -eq $postJ) { $pOk = $false }
-  if ($pOk) {
-    foreach ($op in @($postJ.ops)) {
-      if ($op.op -eq 'create') {
-        if (Test-Path -LiteralPath $op.target) { $pOk=$false; break }
-      } elseif ($op.op -eq 'replace') {
-        if (Test-Path -LiteralPath $op.target) {
-          $tsha = Get-FileSha256 $op.target
-          if ($tsha -ne $op.beforeSha) { $pOk=$false; break }
-        }
-      }
-    }
-  }
-  if (-not $pOk) {
-    $h = if ($ko) { ('사후 검증 실패; 파일 상태가 깨끗하지 않을 수 있습니다. journal={0}' -f $journalPath) }
-         else     { ('Post-verification failed; files may be unclean. journal={0}' -f $journalPath) }
-    Write-StatusLine -Status 'failed' -Reason 'post-verify-failed' -Human $h
-    return 1
-  }
-
-  # 7. Success.
-  $opCount   = @($journalData.ops).Count
-  $txid      = ''; try { $txid = [string]$postJ.txid } catch {}
-  if ([string]::IsNullOrEmpty($txid)) { try { $txid = [string]$journalData.txid } catch {} }
-
-  Write-Output "journal=$journalPath"
-  if ($txid -ne '') { Write-Output "txid=$txid" }
-  $h = if ($ko) { ('{0}개의 작업을 성공적으로 제거했습니다.' -f $opCount) }
-       else     { ('Removed {0} operation(s) successfully.' -f $opCount) }
-  Write-StatusLine -Status 'removed' -Reason "opcount-$opCount" -Human $h
-  return 0
 }
 
 # ---- argument-mode entry (manual parse: unknown/missing args must exit 2) ----

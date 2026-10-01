@@ -29,7 +29,8 @@
 param(
   [string]$EvidenceDir = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-generic-installer-diagnose/w3/task-8',
   [string]$PackageRoot = '',
-  [string]$ScratchRoot = ''
+  [string]$ScratchRoot = '',
+  [string]$ResourceCacheRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +47,15 @@ $notepadExe = 'C:\Windows\System32\notepad.exe'
 $defaultJournalRoot = Join-Path $env:LOCALAPPDATA 'susemi-installer\journal'
 $LF = "`n"
 $CRLF = "`r`n"
+$resourceNames = @(
+  'OptiScaler/amd_fidelityfx_framegeneration_dx12.dll',
+  'OptiScaler/amd_fidelityfx_loader_dx12.dll',
+  'OptiScaler/amd_fidelityfx_upscaler_dx12.dll',
+  'OptiScaler/amd_fidelityfx_vk.dll',
+  'OptiScaler/D3D12_OptiScaler/D3D12Core.dll',
+  'OptiScaler/libxell.dll', 'OptiScaler/libxess.dll',
+  'OptiScaler/libxess_dx11.dll', 'OptiScaler/libxess_fg.dll'
+)
 
 if ([string]::IsNullOrEmpty($ScratchRoot)) { $ScratchRoot = Join-Path $env:TEMP ('susemi-t8-qa-' + [guid]::NewGuid().ToString('N')) }
 $rawDir = Join-Path $EvidenceDir 'raw'
@@ -214,12 +224,17 @@ function PeStubBytes([int]$Seed) {
 }
 
 function New-BaseGame {
-  # winmm.dll (UAL pin) + OptiScaler.asi (core pin) + GameA.exe (notepad copy).
+  # Complete already-satisfied payload; equal foreign files are not owned.
   param([string]$Name)
   $dir = Join-Path $ScratchRoot $Name
   New-Item -ItemType Directory -Path $dir -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $script:srcDir 'winmm.dll') -Destination (Join-Path $dir 'winmm.dll') -Force
   Copy-Item -LiteralPath (Join-Path $script:srcDir 'OptiScaler.asi') -Destination (Join-Path $dir 'OptiScaler.asi') -Force
+  foreach ($relative in $resourceNames) {
+    $target = Join-Path $dir $relative
+    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+    New-Item -ItemType HardLink -Path $target -Target (Join-Path $script:srcDir $relative) | Out-Null
+  }
   Copy-Item -LiteralPath $notepadExe -Destination (Join-Path $dir 'GameA.exe') -Force
   return $dir
 }
@@ -324,9 +339,21 @@ $script:wtBefore = Get-LoadorderWorktreeSnapshot $PackageRoot $script:protectedR
 
 # --------------------------------------------------------------- fixtures ---
 
-# Extract the pinned payloads once (read-only source; no network).
+# Reuse an existing checked subset when supplied; otherwise extract one subset.
 $script:srcDir = Join-Path $ScratchRoot '_src'
 New-Item -ItemType Directory -Path $script:srcDir -Force | Out-Null
+if (-not [string]::IsNullOrEmpty($ResourceCacheRoot)) {
+  $links = [ordered]@{
+    'OptiScaler.asi'='OptiScaler.dll'
+    'winmm.dll'='tools/asi-loader/Ultimate-ASI-Loader-x64.dll'
+  }
+  foreach ($relative in $resourceNames) { $links[$relative]=$relative }
+  foreach ($relative in $links.Keys) {
+    $target=Join-Path $script:srcDir $relative
+    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+    New-Item -ItemType HardLink -Path $target -Target (Join-Path $ResourceCacheRoot $links[$relative]) | Out-Null
+  }
+} else {
 Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
 $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path -LiteralPath $zipPath).Path)
 try {
@@ -334,7 +361,15 @@ try {
   [IO.Compression.ZipFileExtensions]::ExtractToFile($e1, (Join-Path $script:srcDir 'OptiScaler.asi'), $true)
   $e2 = @($zip.Entries | Where-Object { $_.FullName -eq 'tools/asi-loader/Ultimate-ASI-Loader-x64.dll' })[0]
   [IO.Compression.ZipFileExtensions]::ExtractToFile($e2, (Join-Path $script:srcDir 'winmm.dll'), $true)
+  foreach ($relative in $resourceNames) {
+    $entries = @($zip.Entries | Where-Object { $_.FullName -ceq $relative })
+    if ($entries.Count -ne 1) { throw ('Resource source missing/duplicate: '+$relative) }
+    $target = Join-Path $script:srcDir $relative
+    New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+    [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $target, $false)
+  }
 } finally { $zip.Dispose() }
+}
 Write-Host ('fixture sources: ual=' + (Sha256 (Join-Path $script:srcDir 'winmm.dll')) + ' core=' + (Sha256 (Join-Path $script:srcDir 'OptiScaler.asi')))
 
 function Invoke-Scenario([string]$name, [scriptblock]$body) {
@@ -532,20 +567,18 @@ Invoke-Scenario 'i-rollback-removes-created-ini' {
   Assert ((StatusLine $rb.stdout) -eq 'status=recovered reason=ok') 'rollback status=recovered reason=ok'
   Assert (-not (Test-Path -LiteralPath $ini)) 'created winmm.ini removed by rollback'
 
-  # The two pre-existing payload files were REPLACE ops, so prepare kept their
-  # byte-exact preimages under .susemi-backup and the journal retains them (T7's
-  # documented rollback contract). Prove no game file changed and that the only
-  # additions are those installer-owned preimages.
+  # Equal pre-existing payloads are foreign reuse checks, not replacements.
+  # Rollback removes only the created INI and must leave no shadow preimages.
   $postMap = ShaMap $game
   Say ("post-rollback map:`n" + (MapText $postMap))
   $changed = @()
   foreach ($k in $preMap.Keys) { if (-not $postMap.ContainsKey($k) -or $postMap[$k] -ne $preMap[$k]) { $changed += $k } }
   Assert ($changed.Count -eq 0) ('no pre-existing game file changed bytes (' + ($changed -join ',') + ')')
   $added = @($postMap.Keys | Where-Object { -not $preMap.ContainsKey($_) })
-  $expectedAdded = @('.susemi-backup\OptiScaler.asi.susemi-bak', '.susemi-backup\winmm.dll.susemi-bak')
+  $expectedAdded = @()
   Assert ((($added | Sort-Object) -join '|') -eq (($expectedAdded | Sort-Object) -join '|')) ('only installer-owned preimages added (' + ($added -join ',') + ')')
-  Assert ($postMap['.susemi-backup\OptiScaler.asi.susemi-bak'] -eq $pinCore) 'backup preimage of OptiScaler.asi is byte-exact'
-  Assert ($postMap['.susemi-backup\winmm.dll.susemi-bak'] -eq $pinUal) 'backup preimage of winmm.dll is byte-exact'
+  Assert ($postMap['OptiScaler.asi'] -eq $pinCore) 'foreign equal OptiScaler.asi remains byte-exact without ownership'
+  Assert ($postMap['winmm.dll'] -eq $pinUal) 'foreign equal winmm.dll remains byte-exact without ownership'
 }
 
 Invoke-Scenario 'i2-rollback-all-create-byte-identical' {
@@ -675,7 +708,7 @@ Invoke-Scenario 'e-convert-reshade-proxy' {
   foreach ($k in $pre.Keys) { if (-not $post.ContainsKey($k) -or $post[$k] -ne $pre[$k]) { $changed += $k } }
   Assert ($changed.Count -eq 0) ('no pre-existing game file changed bytes (' + ($changed -join ',') + ')')
   $added = @($post.Keys | Where-Object { -not $pre.ContainsKey($_) })
-  Assert ((($added | Sort-Object) -join '|') -eq ((@('.susemi-backup\OptiScaler.asi.susemi-bak', '.susemi-backup\winmm.dll.susemi-bak') | Sort-Object) -join '|')) ('only installer-owned preimages added (' + ($added -join ',') + ')')
+  Assert ($added.Count -eq 0) ('no shadow preimages or residual payloads added (' + ($added -join ',') + ')')
 }
 
 # --------------------------------------------------------------------- f ---

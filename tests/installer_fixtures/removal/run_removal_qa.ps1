@@ -9,27 +9,14 @@
   fixture setup -> install -> (optional tamper/journal mutation) -> remove ->
   assertions on exit codes, machine `status=` lines and SHA maps -> cleanup.
 
-  CONCURRENT-PRODUCER NOTE (sibling T9a implements the remove body):
-    The harness polls for the remove body to land. Two independent signals:
-      1. syntax marker: tools/susemi_installer.ps1 no longer contains the stub
-         token `remove-pending-T9`;
-      2. a behavioural smoke: `remove` on a folder with no install record must
-         stop returning status=pending reason=remove-pending-T9.
-    Until both agree, every scenario is reported as PENDING-REAL-BODY (never a
-    pass or a fail) and the run exits 3. Re-run the harness after T9a lands and
-    the same scenarios report real PASS/FAIL.
-
   ISOLATION:
-    Preference is a run-scoped journal root via env SUSEMI_TX_JOURNAL_ROOT
-    (the install path already honours it). A startup probe verifies the
-    landed remove honours it too; if not, the harness falls back to the real
-    %LOCALAPPDATA%\susemi-installer\journal root and snapshot/restores it
-    around every case (before/after counts must stay equal - the T7 rule).
+    Every child receives a case-owned LOCALAPPDATA and the pinned source ZIP.
+    A real install/remove probe must restore its entire game map and use that
+    private journal root. Broken isolation fails; no user-global fallback exists.
 
   Every child process runs with a hard timeout + kill. Scratch is removed.
-  No fixed sleep is used as a synchronisation primitive; the landing poll and
-  the probe wait on observable state (file marker + machine status lines) with
-  bounded intervals and a bounded deadline.
+  Native process completion uses bounded waits. Run only against released code;
+  the remove-body smoke is checked once, never polled.
 
   EXIT: 0 = all scenarios PASS (real body); 1 = real body, >=1 scenario FAIL;
         3 = PENDING-REAL-BODY (remove body not landed yet).
@@ -38,7 +25,6 @@ param(
   [string]$EvidenceDir = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-generic-installer-diagnose/w3/task-9',
   [string]$PackageRoot = '',
   [string]$ScratchRoot = '',
-  [int]$PollSeconds = 180,
   [string]$Rc2Zip = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip',
   [string]$PingExe = 'C:\Windows\System32\ping.exe'
 )
@@ -58,6 +44,7 @@ $rawDir = Join-Path $EvidenceDir 'raw'
 New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 
+$script:unreapedOwnedChild = $false
 $script:caseName = ''
 $script:caseBuf = $null
 $script:caseStatuses = $null
@@ -66,8 +53,8 @@ $script:removeLanded = $false
 $script:markerLanded = $false
 $script:smokeStatus = ''
 $script:smokeReason = ''
-$script:removeConsentMode = 'none'   # 'yes' | 'none'
-$script:journalMode = 'env'          # 'env' | 'realroot'
+$script:removeConsentMode = 'yes'
+$script:journalMode = 'private-localappdata'
 $script:statusLineDefects = 0
 $script:noStatusLines = 0
 $script:realRootLeaks = 0
@@ -134,17 +121,27 @@ function Invoke-Child {
   $p.StartInfo = $psi
   try {
     $null = $p.Start()
+    $null = $p.Handle
     $o = $p.StandardOutput.ReadToEndAsync()
     $e = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($TimeoutSec * 1000)) {
       $res.timedOut = $true
-      try { $p.Kill() } catch { }
-      try { $null = $p.WaitForExit(5000) } catch { }
+      $killInfo = New-Object Diagnostics.ProcessStartInfo
+      $killInfo.FileName = 'taskkill.exe'
+      $killInfo.Arguments = '/PID ' + $p.Id + ' /T /F'
+      $killInfo.UseShellExecute = $false
+      $killInfo.CreateNoWindow = $true
+      $killer = [Diagnostics.Process]::Start($killInfo)
+      if (-not $killer.WaitForExit(15000)) { $script:unreapedOwnedChild = $true; throw 'Owned tree termination timed out' }
+      $killExit = $killer.ExitCode
+      $killer.Dispose()
+      if ($killExit -ne 0 -or -not $p.WaitForExit(15000)) { $script:unreapedOwnedChild = $true; throw 'Owned tree was not reaped' }
     }
-    try { $null = $p.WaitForExit(5000) } catch { }
-    try { $res.exit = [int]$p.ExitCode } catch { $res.exit = -1 }
-    try { $res.stdout = [string]$o.Result } catch { }
-    try { $res.stderr = [string]$e.Result } catch { }
+    if (-not $p.HasExited) { $script:unreapedOwnedChild = $true; throw 'Owned child exit was not observed' }
+    if (-not $o.Wait(15000) -or -not $e.Wait(15000)) { $script:unreapedOwnedChild = $true; throw 'Owned streams did not close' }
+    $res.stdout = [string]$o.Result
+    $res.stderr = [string]$e.Result
+    $res.exit = [int]$p.ExitCode
   } catch {
     $res.stderr = [string]$_.Exception.Message
   } finally {
@@ -207,15 +204,14 @@ function New-Game([string]$dir) {
 
 # active journal root for a case -------------------------------------------------
 function New-CaseJournalRoot([string]$case) {
-  if ($script:journalMode -eq 'realroot') { return $defaultJournalRoot }
-  $jr = Join-Path $ScratchRoot ($case + '\journals')
+  $jr = Join-Path $ScratchRoot ($case + '\local\susemi-installer\journal')
   New-Item -ItemType Directory -Path $jr -Force | Out-Null
   return $jr
 }
 
 function Case-Env([string]$jr) {
-  if ($script:journalMode -eq 'realroot') { return @{ 'SUSEMI_TX_JOURNAL_ROOT' = '' } }
-  return @{ 'SUSEMI_TX_JOURNAL_ROOT' = $jr }
+  $local = Split-Path -Parent (Split-Path -Parent $jr)
+  return @{ 'LOCALAPPDATA' = $local; 'SUSEMI_TX_JOURNAL_ROOT' = ''; 'SUSEMI_RC2_ZIP' = $Rc2Zip }
 }
 
 # real journal root snapshot / restore (the T7 before=0/after=0 rule) -------------
@@ -224,22 +220,11 @@ function Get-RootSnapshot([string]$root) {
   if ($res.existed) {
     foreach ($f in @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
       $rel = $f.FullName.Substring($root.Length).TrimStart('\')
-      $res.files[$rel] = $true
+      $res.files[$rel] = Sha256 $f.FullName
     }
     $res.count = $res.files.Count
   }
   return $res
-}
-
-function Restore-RootSnapshot([string]$root, $snap) {
-  if (-not (Test-Path -LiteralPath $root -PathType Container)) { return }
-  foreach ($f in @(Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-    $rel = $f.FullName.Substring($root.Length).TrimStart('\')
-    if (-not $snap.files.ContainsKey($rel)) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
-  }
-  if (-not $snap.existed) {
-    try { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue } catch { }
-  }
 }
 
 # --------------------------------------------------------- case framework ----
@@ -287,15 +272,15 @@ function Invoke-Scenario([string]$name, [scriptblock]$body) {
     if ($script:removeLanded) { Say ('ASSERT-FAIL: scenario threw: ' + $_.Exception.Message) }
     else { Say ('PENDING-REAL-BODY: scenario threw under stub: ' + $_.Exception.Message) }
   }
-  Restore-RootSnapshot $defaultJournalRoot $snap
   $after = Get-RootSnapshot $defaultJournalRoot
-  $iso = ($snap.count -eq $after.count) -and ($snap.existed -eq $after.existed)
+  $iso = (MapsEqual $snap.files $after.files) -and ($snap.existed -eq $after.existed)
   if (-not $iso) { $script:realRootLeaks++ }
+  Assert2 $iso 'user-global journal file map and existence unchanged (read-only audit)'
   Say (('ISOLATION ' + $(if ($iso) { 'PASS' } else { 'FAIL' }) + ': real journal root before=' + $snap.count + ' after=' + $after.count + ' existed_before=' + $snap.existed))
   End-Case
 }
 
-# ------------------------------------------------- landing poll + probes ----
+# ------------------------------------------------ one-shot smoke + probe ----
 
 function Test-RemoveLandedOnce {
   $inst = ''
@@ -306,26 +291,16 @@ function Test-RemoveLandedOnce {
   $markerGone = -not ($inst -match 'remove-pending-T9')
   $sg = Join-Path $ScratchRoot 'landing\game'
   New-Game $sg
-  $sr = Join-Path $ScratchRoot 'landing\journals'
-  New-Item -ItemType Directory -Path $sr -Force | Out-Null
-  $sm = Invoke-Child -FileName $psExe -ArgList (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installer, 'remove', '-Exe', (Join-Path $sg 'GameA.exe'), '-Lang', 'en')) -EnvVars @{ 'SUSEMI_TX_JOURNAL_ROOT' = $sr } -TimeoutSec 120
+  $sr = New-CaseJournalRoot 'landing'
+  $sm = Invoke-Child -FileName $psExe -ArgList (Remove-Args (Join-Path $sg 'GameA.exe')) -EnvVars (Case-Env $sr) -TimeoutSec 120
   $ms = Get-MachineStatus $sm.stdout
   $smokeStub = ($ms.status -eq 'pending') -or ($ms.reason -like '*remove-pending*')
-  $smokeUsable = -not [string]::IsNullOrEmpty($ms.status)
+  $smokeUsable = $sm.exit -eq 1 -and -not $sm.timedOut -and $ms.status -eq 'missing-input' -and $ms.reason -eq 'no-install-record'
   return @{ marker = $markerGone; smokeStatus = $ms.status; smokeReason = $ms.reason; smokeStub = $smokeStub; smokeUsable = $smokeUsable; landed = ($smokeUsable -and (-not $smokeStub)) }
 }
 
-function Invoke-LandingPoll {
-  # Bounded poll on two observable signals; no fixed sleep is used as the sync
-  # primitive (a fresh file/status read drives every decision).
-  $deadline = (Get-Date).AddSeconds($PollSeconds)
-  $last = $null
-  while ($true) {
-    $last = Test-RemoveLandedOnce
-    if ($last.landed) { break }
-    if ((Get-Date) -ge $deadline) { break }
-    Start-Sleep -Seconds 15
-  }
+function Test-RemoveReady {
+  $last = Test-RemoveLandedOnce
   $script:markerLanded = $last.marker
   $script:smokeStatus = $last.smokeStatus
   $script:smokeReason = $last.smokeReason
@@ -333,37 +308,26 @@ function Invoke-LandingPoll {
   return $last
 }
 
-function Detect-RemoveConsentMode {
-  try {
-    $cg = Join-Path $ScratchRoot 'consent\game'; New-Game $cg
-    $cr = Join-Path $ScratchRoot 'consent\journals'; New-Item -ItemType Directory -Path $cr -Force | Out-Null
-    $r = Invoke-Child -FileName $psExe -ArgList (@('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installer, 'remove', '-Exe', (Join-Path $cg 'GameA.exe'), '-Consent', 'yes', '-Lang', 'en')) -EnvVars @{ 'SUSEMI_TX_JOURNAL_ROOT' = $cr } -TimeoutSec 120
-    $ms = Get-MachineStatus $r.stdout
-    if (($r.exit -eq 2) -and ($ms.status -eq 'invalid-invocation')) { return 'none' }
-    return 'yes'
-  } catch { return 'none' }
-}
-
 function Probe-JournalMode {
-  # Does the landed remove read the same (env-isolated) journal root as install?
-  $snap = Get-RootSnapshot $defaultJournalRoot
-  try {
     $pg = Join-Path $ScratchRoot 'probe\game'; New-Game $pg
     $exe = Join-Path $pg 'GameA.exe'
-    $pr = Join-Path $ScratchRoot 'probe\journals'; New-Item -ItemType Directory -Path $pr -Force | Out-Null
-    $env1 = @{ 'SUSEMI_TX_JOURNAL_ROOT' = $pr }
+    $pr = New-CaseJournalRoot 'probe'
+    $env1 = Case-Env $pr
     $pre = ShaMap $pg
     $i = Invoke-Child -FileName $psExe -ArgList (Install-Args $exe) -EnvVars $env1 -TimeoutSec 300
-    if ($i.exit -ne 0) { return 'env' }
-    $ra = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installer, 'remove', '-Exe', $exe, '-Lang', 'en')
-    if ($script:removeConsentMode -eq 'yes') { $ra += @('-Consent', 'yes') }
+    if ($i.exit -ne 0 -or $i.timedOut) { throw ('Isolation probe install failed: ' + $i.exit + ' ' + $i.stdout + ' ' + $i.stderr) }
+    $jp = Get-JournalPath $i.stdout
+    if ([string]::IsNullOrEmpty($jp) -or
+        -not ([IO.Path]::GetFullPath($jp).StartsWith([IO.Path]::GetFullPath($pr) + '\', [StringComparison]::OrdinalIgnoreCase))) {
+      throw 'Isolation probe journal escaped the compulsory private root'
+    }
+    $ra = Remove-Args $exe
     $r = Invoke-Child -FileName $psExe -ArgList $ra -EnvVars $env1 -TimeoutSec 120
     $post = ShaMap $pg
-    if (($r.exit -eq 0) -and (MapsEqual $pre $post)) { return 'env' }
-    return 'realroot'
-  } catch { return 'env' } finally {
-    Restore-RootSnapshot $defaultJournalRoot $snap
-  }
+    if ($r.exit -ne 0 -or $r.timedOut -or -not (MapsEqual $pre $post)) {
+      throw ('Isolation probe removal failed: ' + $r.exit + ' ' + $r.stdout + ' ' + $r.stderr)
+    }
+    return 'private-localappdata'
 }
 
 # ================================================================ run =======
@@ -372,6 +336,7 @@ Write-Host ('removal QA: installer=' + $installer)
 Write-Host ('removal QA: scratch=' + $ScratchRoot)
 Write-Host ('removal QA: evidence=' + $EvidenceDir)
 Write-Host ('removal QA: rc2 zip pin=' + $pinZip + ' present=' + (Test-Path -LiteralPath $Rc2Zip -PathType Leaf))
+if ((Sha256 $Rc2Zip) -ne $pinZip) { throw 'Pinned ZIP prerequisite is missing or mismatched' }
 
 $pingOk = Test-Path -LiteralPath $PingExe -PathType Leaf
 Write-Host ('removal QA: game exe fixture=' + $PingExe + ' present=' + $pingOk)
@@ -380,20 +345,18 @@ $gitBefore = ''
 try { $gitBefore = [string](& git -C $PackageRoot status --short 2>$null | Out-String) } catch { $gitBefore = '' }
 
 Write-Host ''
-Write-Host '=== landing poll ==='
-$land = Invoke-LandingPoll
+Write-Host '=== released-code smoke ==='
+$land = Test-RemoveReady
 Write-Host ('landing: marker_gone=' + $land.marker + ' smoke_status=' + $land.smokeStatus + ' smoke_reason=' + $land.smokeReason + ' smoke_usable=' + $land.smokeUsable + ' landed=' + $land.landed)
 if ($land.landed -and (-not $land.marker)) { Write-Host 'landing-note: smoke says the body landed but the stub token is still present (stale docstring text); smoke is authoritative.' }
 
 if ($script:removeLanded) {
-  $script:removeConsentMode = Detect-RemoveConsentMode
   Write-Host ('remove consent mode: ' + $script:removeConsentMode)
   $script:journalMode = Probe-JournalMode
   Write-Host ('journal isolation mode: ' + $script:journalMode)
 } else {
   Write-Host 'remove body NOT landed (stub still active) -> all scenarios report PENDING-REAL-BODY'
-  # Still detect the consent surface so scenario i can report it precisely.
-  $script:removeConsentMode = Detect-RemoveConsentMode
+  throw 'Released remove body is not ready; no scenarios launched'
 }
 
 # --------------------------------------------------------------- scenarios --
@@ -448,6 +411,7 @@ Invoke-Scenario 'b-reshade-first-ini' {
     Say ("post-remove map:`n" + (MapText $post))
     Assert2 (MapsEqual $pre $post) 'byte-identity incl. absence (ReShade-first INI)'
   } else {
+    Assert2 $false 'ReShade-first INI install must succeed; plain fallback cannot certify this scenario'
     Say ('OBSERVED: -ReshadeFirst install not usable here (exit=' + $inst.exit + ' ini_created=' + $iniCreated + ' status=' + $inst.status + '/' + $inst.reason + ')')
     Say 'PENDING-INI: -ReshadeFirst/winmm.ini path not exercised; running the plain-install fallback and recording the INI part PENDING.'
     $inst2 = Invoke-Cmd 'install-b-plain' (Install-Args $exe) $env
@@ -660,6 +624,7 @@ Invoke-Scenario 'j-reinstalled-since-removal' {
 
 Write-Host ''
 Write-Host '=== cleanup ==='
+if ($script:unreapedOwnedChild) { throw 'Owned child tree unconfirmed; scratch retained' }
 foreach ($childPid in $global:qaChildren) { Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue }
 $scratchRemoved = $false
 try { Remove-Item -LiteralPath $ScratchRoot -Recurse -Force -ErrorAction Stop; $scratchRemoved = $true } catch { Write-Host ('cleanup: ' + $_.Exception.Message) }
@@ -764,6 +729,6 @@ Set-Content -LiteralPath (Join-Path $EvidenceDir 'removal.md') -Value ($md -join
 
 Write-Host ''
 if (-not $script:removeLanded) { Write-Host 'QA PENDING-REAL-BODY: remove body not landed'; exit 3 }
-if ($failed.Count -gt 0) { Write-Host ('QA FAIL: ' + $failed.Count + ' scenario(s) failed'); exit 1 }
+if ($failed.Count -gt 0 -or $script:realRootLeaks -gt 0 -or -not $scratchRemoved) { Write-Host ('QA FAIL: ' + $failed.Count + ' scenario(s) failed; global leaks=' + $script:realRootLeaks + '; scratch removed=' + $scratchRemoved); exit 1 }
 Write-Host 'QA PASS: all scenarios green'
 exit 0

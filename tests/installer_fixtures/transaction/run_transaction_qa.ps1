@@ -4,14 +4,13 @@
   run_transaction_qa.ps1 - T7 QA harness for the owned install transaction.
 
   Scenarios a-h from the T7 brief. Uses ONLY %TEMP% scratch + a run-scoped
-  journal root (env SUSEMI_TX_JOURNAL_ROOT), writes raw logs to the evidence
+  journal root (child-only LOCALAPPDATA), writes raw logs to the evidence
   dir, and cleans up after itself (processes, scratch, journal root).
   Exit 0 only if every scenario assertion passes.
 
 .NOTES
-  No fixed sleeps are used as a synchronisation primitive: process/lock
-  readiness is awaited with bounded polls on observable state, and lock-holder
-  children are torn down with Wait-Process (+ kill fallback).
+  Lock events are created before child launch. Readiness follows the real lock;
+  release and native process completion use bounded waits without polling.
 #>
 param(
   [string]$EvidenceDir = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-generic-installer-diagnose/w2/task-7',
@@ -37,10 +36,12 @@ if ([string]::IsNullOrEmpty($ScratchRoot)) { $ScratchRoot = Join-Path $env:TEMP 
 $rawDir = Join-Path $EvidenceDir 'raw'
 New-Item -ItemType Directory -Path $ScratchRoot -Force | Out-Null
 New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
-$script:journalRoot = Join-Path $ScratchRoot 'journals'
+$script:localAppData = Join-Path $ScratchRoot 'local'
+$script:journalRoot = Join-Path $script:localAppData 'susemi-installer\journal'
 New-Item -ItemType Directory -Path $script:journalRoot -Force | Out-Null
-$script:coordEnv = @{ 'SUSEMI_TX_JOURNAL_ROOT' = $script:journalRoot }
+$script:coordEnv = @{ 'LOCALAPPDATA' = $script:localAppData; 'SUSEMI_TX_JOURNAL_ROOT' = ''; 'SUSEMI_RC2_ZIP' = $zipPath }
 
+$script:unreapedOwnedChild = $false
 $script:caseName = ''
 $script:caseBuf = $null
 $script:rows = New-Object System.Collections.ArrayList
@@ -102,17 +103,27 @@ function Invoke-Child {
   $p.StartInfo = $psi
   try {
     $null = $p.Start()
+    $null = $p.Handle
     $o = $p.StandardOutput.ReadToEndAsync()
     $e = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($TimeoutSec * 1000)) {
       $res.timedOut = $true
-      try { $p.Kill() } catch { }
-      try { $null = $p.WaitForExit(5000) } catch { }
+      $killInfo = New-Object Diagnostics.ProcessStartInfo
+      $killInfo.FileName = 'taskkill.exe'
+      $killInfo.Arguments = '/PID ' + $p.Id + ' /T /F'
+      $killInfo.UseShellExecute = $false
+      $killInfo.CreateNoWindow = $true
+      $killer = [Diagnostics.Process]::Start($killInfo)
+      if (-not $killer.WaitForExit(15000)) { $script:unreapedOwnedChild = $true; throw 'Owned tree termination timed out' }
+      $killExit = $killer.ExitCode
+      $killer.Dispose()
+      if ($killExit -ne 0 -or -not $p.WaitForExit(15000)) { $script:unreapedOwnedChild = $true; throw 'Owned tree was not reaped' }
     }
-    try { $null = $p.WaitForExit(5000) } catch { }
-    try { $res.exit = [int]$p.ExitCode } catch { $res.exit = -1 }
-    try { $res.stdout = [string]$o.Result } catch { }
-    try { $res.stderr = [string]$e.Result } catch { }
+    if (-not $p.HasExited) { $script:unreapedOwnedChild = $true; throw 'Owned child exit was not observed' }
+    if (-not $o.Wait(15000) -or -not $e.Wait(15000)) { $script:unreapedOwnedChild = $true; throw 'Owned streams did not close' }
+    $res.stdout = [string]$o.Result
+    $res.stderr = [string]$e.Result
+    $res.exit = [int]$p.ExitCode
   } catch {
     $res.stderr = [string]$_.Exception.Message
   } finally {
@@ -193,27 +204,36 @@ function New-Stage([string]$dir) {
   } finally { $zip.Dispose() }
 }
 
-function Wait-ForFile([string]$path, [int]$maxMs = 20000) {
-  $elapsed = 0
-  while ($elapsed -lt $maxMs) {
-    if (Test-Path -LiteralPath $path) { return $true }
-    Start-Sleep -Milliseconds 100
-    $elapsed += 100
-  }
-  return $false
+function Start-Lock([string]$target, [string]$share) {
+  $id = 'Local\susemi-lock-' + [guid]::NewGuid().ToString('N')
+  $ready = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, ($id + '-ready'))
+  $release = New-Object Threading.EventWaitHandle($false, [Threading.EventResetMode]::ManualReset, ($id + '-release'))
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = $psExe
+  $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $lockHolder + '" -Path "' + $target + '" -ReadyEvent "' + $id + '-ready" -ReleaseEvent "' + $id + '-release" -Share ' + $share
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $p = New-Object Diagnostics.Process
+  $p.StartInfo = $psi
+  $state = @{ Process = $p; Ready = $ready; Release = $release }
+  $global:qaLocks += $state
+  [void]$p.Start()
+  # Retain the genuine process handle before waiting or attempting teardown.
+  $null = $p.Handle
+  $global:qaChildren += $p
+  if (-not $ready.WaitOne(20000)) { throw 'Lock holder did not signal readiness' }
+  return $state
 }
 
-function Wait-Gone([int]$procId, [int]$maxMs = 15000) {
-  $elapsed = 0
-  while ($elapsed -lt $maxMs) {
-    if ($null -eq (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { return $true }
-    Start-Sleep -Milliseconds 100
-    $elapsed += 100
-  }
-  return $false
+function Release-Lock($state) {
+  [void]$state.Release.Set()
+  if (-not $state.Process.WaitForExit(30000)) { throw 'Lock holder did not exit after release' }
+  if ($state.Process.ExitCode -ne 0) { throw ('Lock holder failed: ' + $state.Process.ExitCode) }
+  return $true
 }
 
 $global:qaChildren = @()
+$global:qaLocks = @()
 
 function Invoke-Scenario([string]$name, [scriptblock]$body) {
   Start-Case $name
@@ -222,6 +242,10 @@ function Invoke-Scenario([string]$name, [scriptblock]$body) {
 }
 
 # --------------------------------------------------------------- scenarios --
+
+$defaultMapBefore = ShaMap $defaultJournalRoot
+$defaultExistedBefore = Test-Path -LiteralPath $defaultJournalRoot
+if ((Sha256 $zipPath) -ne '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a') { throw 'Pinned ZIP prerequisite is missing or mismatched' }
 
 Invoke-Scenario 'a-happy-asi-ual' {
   $game = Join-Path $ScratchRoot 'a\game'
@@ -283,12 +307,16 @@ Invoke-Scenario 'c-game-running' {
   Say 'fixture note: the System32 notepad.exe copy exits immediately on this host (Store stub),'
   Say 'so the "game running" fixture is a byte copy of System32\ping.exe held open by -n 120.'
 
-  $proc = Start-Process -FilePath $exe -ArgumentList '-n', '120', '127.0.0.1' -PassThru -WindowStyle Hidden
-  $alive = $null
-  for ($i = 0; $i -lt 100; $i++) { $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue; if ($alive) { break }; Start-Sleep -Milliseconds 100 }
-  Assert ($null -ne $alive) ('fixture process running pid=' + $proc.Id)
-  if ($alive) { Say ('  path=' + $alive.Path) }
-  $global:qaChildren += $proc.Id
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = $exe
+  $psi.Arguments = '-n 120 127.0.0.1'
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $proc = [Diagnostics.Process]::Start($psi)
+  $null = $proc.Handle
+  $global:qaChildren += $proc
+  Assert (-not $proc.HasExited) ('fixture process running pid=' + $proc.Id)
+  Say ('  path=' + $proc.MainModule.FileName)
 
   $r = RunInstaller $exe 'yes' $null $null
   Assert ($r.exit -eq 1) ('install refused exit 1 (got ' + $r.exit + ')')
@@ -298,8 +326,8 @@ Invoke-Scenario 'c-game-running' {
   Say ("pre map:`n" + (MapText $pre) + "`npost map:`n" + (MapText $post))
   Assert (MapsEqual $pre $post) 'zero writes while game running'
 
-  Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-  Assert (Wait-Gone $proc.Id 15000) ('fixture process stopped (pid=' + $proc.Id + ')')
+  $proc.Kill()
+  Assert ($proc.WaitForExit(15000)) ('fixture process stopped (pid=' + $proc.Id + ')')
 }
 
 Invoke-Scenario 'd-locked-target' {
@@ -309,12 +337,9 @@ Invoke-Scenario 'd-locked-target' {
   $ual = Join-Path $game 'winmm.dll'
   Set-Content -LiteralPath $ual -Value 'PRIOR-UAL-CONTENT' -NoNewline
   $preWin = Sha256 $ual
-  $ready = Join-Path $ScratchRoot 'd\ready-read.txt'
-  $release = Join-Path $ScratchRoot 'd\release-read.txt'
-  $lock = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $lockHolder, '-Path', $ual, '-ReadyFile', $ready, '-ReleaseFile', $release, '-Share', 'Read') -PassThru -WindowStyle Hidden
-  $global:qaChildren += $lock.Id
-  Assert (Wait-ForFile $ready 20000) 'lock holder ready (FileShare.Read)'
-  Say ('lock holder pid=' + $lock.Id + ' mode=Read target=' + $ual)
+  $lock = Start-Lock $ual 'Read'
+  Assert ($lock.Ready.WaitOne(0)) 'lock holder ready (FileShare.Read)'
+  Say ('lock holder pid=' + $lock.Process.Id + ' mode=Read target=' + $ual)
 
   $r = RunInstaller (Join-Path $game 'GameA.exe') 'yes' 'asi' $null
   Assert ($r.exit -ne 0) ('install reported failure (got ' + $r.exit + ')')
@@ -333,10 +358,7 @@ Invoke-Scenario 'd-locked-target' {
   Assert ($rb.exit -eq 0) ('rollback after failure exit 0 (got ' + $rb.exit + ')')
   Assert ((Sha256 $ual) -eq $preWin) 'locked file still untouched after rollback'
 
-  Set-Content -LiteralPath $release -Value 'go' -NoNewline
-  try { Wait-Process -Id $lock.Id -Timeout 30 -ErrorAction SilentlyContinue } catch { }
-  if (-not $lock.HasExited) { Stop-Process -Id $lock.Id -Force -ErrorAction SilentlyContinue }
-  Assert (Wait-Gone $lock.Id 15000) 'lock holder child released + exited'
+  Assert (Release-Lock $lock) 'lock holder child released + exited'
 
   # d2: FileShare.None -> existing target bytes unreadable -> refuse at plan, zero writes.
   $game2 = Join-Path $ScratchRoot 'd\game2'
@@ -344,18 +366,12 @@ Invoke-Scenario 'd-locked-target' {
   $ual2 = Join-Path $game2 'winmm.dll'
   Set-Content -LiteralPath $ual2 -Value 'PRIOR-UAL-2' -NoNewline
   $pre2 = ShaMap $game2
-  $ready2 = Join-Path $ScratchRoot 'd\ready-none.txt'
-  $release2 = Join-Path $ScratchRoot 'd\release-none.txt'
-  $lock2 = Start-Process -FilePath $psExe -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $lockHolder, '-Path', $ual2, '-ReadyFile', $ready2, '-ReleaseFile', $release2, '-Share', 'None') -PassThru -WindowStyle Hidden
-  $global:qaChildren += $lock2.Id
-  Assert (Wait-ForFile $ready2 20000) 'lock holder ready (FileShare.None)'
+  $lock2 = Start-Lock $ual2 'None'
+  Assert ($lock2.Ready.WaitOne(0)) 'lock holder ready (FileShare.None)'
   $r2 = RunInstaller (Join-Path $game2 'GameA.exe') 'yes' $null $null
   Assert ($r2.exit -ne 0) ('install refused under FileShare.None (got ' + $r2.exit + ')')
   Assert ($r2.stdout -match 'status=refused reason=before-sha-read-failure') 'status=refused reason=before-sha-read-failure'
-  Set-Content -LiteralPath $release2 -Value 'go' -NoNewline
-  try { Wait-Process -Id $lock2.Id -Timeout 30 -ErrorAction SilentlyContinue } catch { }
-  if (-not $lock2.HasExited) { Stop-Process -Id $lock2.Id -Force -ErrorAction SilentlyContinue }
-  Assert (Wait-Gone $lock2.Id 15000) 'lock holder child 2 released + exited'
+  Assert (Release-Lock $lock2) 'lock holder child 2 released + exited'
   # Re-hash now that the FileShare.None handle is gone: a still-locked file hashes to
   # '' (read denied), which is a harness artifact, not a write.
   $post2 = ShaMap $game2
@@ -490,8 +506,18 @@ Invoke-Scenario 'h-repeat-after-rollback' {
 # ----------------------------------------------------------------- cleanup --
 
 Write-Host '=== cleanup ==='
-foreach ($childPid in $global:qaChildren) { Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue }
+if ($script:unreapedOwnedChild) { throw 'Owned child tree unconfirmed; scratch retained' }
+foreach ($state in $global:qaLocks) { [void]$state.Release.Set() }
+foreach ($child in $global:qaChildren) {
+  if (-not $child.HasExited) {
+    if (-not $child.WaitForExit(30000)) { $child.Kill(); if (-not $child.WaitForExit(15000)) { throw 'Owned child unreaped; scratch retained' } }
+  }
+  $null = $child.ExitCode
+  $child.Dispose()
+}
+foreach ($state in $global:qaLocks) { $state.Ready.Dispose(); $state.Release.Dispose() }
 $defaultAfter = @(Get-ChildItem -LiteralPath $defaultJournalRoot -File -ErrorAction SilentlyContinue).Count
+$defaultUnchanged = (MapsEqual $defaultMapBefore (ShaMap $defaultJournalRoot)) -and ($defaultExistedBefore -eq (Test-Path -LiteralPath $defaultJournalRoot))
 $scratchRemoved = $false
 try { Remove-Item -LiteralPath $ScratchRoot -Recurse -Force -ErrorAction Stop; $scratchRemoved = $true } catch { Write-Host ('cleanup: ' + $_.Exception.Message) }
 
@@ -510,8 +536,9 @@ foreach ($row in $script:rows) { [void]$summary.Add(('{0},{1},{2},{3}' -f $row.c
 [void]$summary.Add('scratch_removed,' + $scratchRemoved)
 [void]$summary.Add('default_journal_before,' + $defaultBefore)
 [void]$summary.Add('default_journal_after,' + $defaultAfter)
+[void]$summary.Add('default_journal_map_unchanged,' + $defaultUnchanged)
 Set-Content -LiteralPath (Join-Path $EvidenceDir 'qa-summary.csv') -Value ($summary -join "`r`n") -Encoding UTF8
 
-if ($failed.Count -gt 0) { Write-Host ('QA FAIL: ' + $failed.Count + ' scenario(s) failed'); exit 1 }
+if ($failed.Count -gt 0 -or -not $defaultUnchanged -or -not $scratchRemoved) { Write-Host ('QA FAIL: ' + $failed.Count + ' scenario(s) failed; default map unchanged=' + $defaultUnchanged + '; scratch removed=' + $scratchRemoved); exit 1 }
 Write-Host 'QA PASS: all scenarios green'
 exit 0

@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
   susemi_stage_helpers.ps1 - private-staging adapter for the approved local Ultimate ASI
@@ -21,7 +21,10 @@
                non-Valid signature is NOT a failure to install: status=staged-unverified
                (documented weaker provenance, exit 0 + explicit warning line) so the
                coordinator can decide. A failed child => exit 1 with its captured reason.
-    verify     Re-check every staged file against the pins/manifests.
+    resources  Stage nine bundled Intel/AMD/DirectX DLLs, preserving their paths.
+               Directory source by default; explicit -Rc2Zip never falls back.
+    resources-verify Re-check the complete nine-file staged resource set.
+    verify     Re-check the existing UAL/Streamline pins/manifests.
 
   Machine line: exactly one "status=<word> reason=<token>" per run. Human text is printed
   bilingually (ko: then en:). Exit: 0 ok, 1 refused/failed, 2 invalid invocation.
@@ -42,10 +45,23 @@ $Rc2ZipDefault = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-
 $Rc2ZipSha     = '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a'
 $Rc2UalEntry   = 'tools/asi-loader/Ultimate-ASI-Loader-x64.dll'
 
+# Trusted shipped manifest pins, never a caller-controlled manifest.
+$ResourcePins = [ordered]@{
+    'OptiScaler/amd_fidelityfx_framegeneration_dx12.dll' = '02297beedd285e822d3a64f314cf00faf378dcec0edc47ff0c4dd71b3a8c2f18'
+    'OptiScaler/amd_fidelityfx_loader_dx12.dll' = 'e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa'
+    'OptiScaler/amd_fidelityfx_upscaler_dx12.dll' = 'd0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46'
+    'OptiScaler/amd_fidelityfx_vk.dll' = 'a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78'
+    'OptiScaler/D3D12_OptiScaler/D3D12Core.dll' = '07d286c306f8117321422affd9e6388c12d0fb4be1c7fc689d9e899324feeb24'
+    'OptiScaler/libxell.dll' = 'd2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7'
+    'OptiScaler/libxess.dll' = '251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7'
+    'OptiScaler/libxess_dx11.dll' = 'c7cfe86f0c9d94e4fb3696d3cd5035e2bbb6a8b1b0572f8b7395a4cdfd0c625e'
+    'OptiScaler/libxess_fg.dll' = 'ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27'
+}
+
 $StreamlineRequired = @('sl.interposer.dll', 'sl.common.dll', 'nvngx_dlssg.dll')
 $ChildTimeoutSec    = 120
 
-$Usage = 'susemi_stage_helpers.ps1 ual -StageDir <dir> [-Source zip|worktree] [-Consent network] [-Rc2Zip <path>] | streamline -StageDir <dir> [-Version <tag>|latest] [-Consent network] | verify -StageDir <dir>'
+$Usage = 'susemi_stage_helpers.ps1 ual -StageDir <dir> [-Source zip|worktree] [-Consent network] [-Rc2Zip <path>] | streamline -StageDir <dir> [-Version <tag>|latest] [-Consent network] | verify -StageDir <dir> | resources -StageDir <owned-dir> [-PackageRoot <dir>] [-Rc2Zip <path>] | resources-verify -StageDir <dir>'
 
 # ------------------------------------------------------------------ output ----
 function Write-Human {
@@ -161,6 +177,139 @@ function Write-ChildOutput {
     Write-Host ('child: exit={0} timedOut={1}' -f $Res.exit, $Res.timedOut)
     if ($Res.stdout) { foreach ($ln in ($Res.stdout.TrimEnd() -split "`r?`n")) { Write-Host ('child| ' + $ln) } }
     if ($Res.stderr) { foreach ($ln in ($Res.stderr.TrimEnd() -split "`r?`n")) { Write-Host ('child! ' + $ln) } }
+}
+
+# --------------------------------------------------------- bundled resources --
+function Test-OrdinaryResourcePath {
+    param([string]$Path, [switch]$Directory)
+    $cursor = [IO.Path]::GetFullPath($Path)
+    $leaf = $true; $exists = $false
+    while ($cursor) {
+        $attributes = $null
+        try { $attributes = [IO.File]::GetAttributes($cursor) }
+        catch {
+            $errorObject = $_.Exception
+            while ($errorObject.InnerException) { $errorObject = $errorObject.InnerException }
+            if (-not ($errorObject -is [IO.FileNotFoundException] -or $errorObject -is [IO.DirectoryNotFoundException])) {
+                throw 'resource-path-unreadable'
+            }
+        }
+        if ($null -ne $attributes) {
+            if ($attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'resource-path-reparse' }
+            $isDir = [bool]($attributes -band [IO.FileAttributes]::Directory)
+            if ((-not $leaf -or $Directory) -and -not $isDir) { throw 'resource-parent-not-directory' }
+            if ($leaf -and -not $Directory -and $isDir) { throw 'resource-path-not-file' }
+            if ($isDir) {
+                try { $null = [IO.Directory]::GetFileSystemEntries($cursor) }
+                catch { throw 'resource-path-unreadable' }
+            }
+            if ($leaf) { $exists = $true }
+        }
+        $cursor = [IO.Path]::GetDirectoryName($cursor); $leaf = $false
+    }
+    return $exists
+}
+
+function Get-ResourceStreamSha {
+    param([IO.Stream]$Stream)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($algorithm.ComputeHash($Stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $algorithm.Dispose() }
+}
+
+function Get-VerifiedResourceOps {
+    param([string]$StageRoot)
+    foreach ($relative in $ResourcePins.Keys) {
+        $target = Get-StageTarget $StageRoot $relative
+        if (-not (Test-OrdinaryResourcePath $target)) { throw 'resource-stage-missing' }
+        if ((Get-Sha256 $target) -ne $ResourcePins[$relative]) { throw 'resource-stage-pin-mismatch' }
+        [pscustomobject]@{ relative = [string]$relative; source = $target; sha256 = $ResourcePins[$relative]; resource = $true }
+    }
+}
+
+function Invoke-Resources {
+    param([string]$StageDir, [string]$PackageRoot, [string]$Rc2Zip, [bool]$Rc2Specified, [switch]$VerifyOnly)
+    $root = Get-StageRoot $StageDir
+    $inputs = @(); $zip = $null; $zipStream = $null; $ops = @()
+    $failure = ''; $reason = 'resource-path-invalid'; $failureStatus = 'refused'; $sourceTag = 'staged'
+    try {
+        # Caller owns this existing private root; partial failures remain there
+        # for caller cleanup after its child is confirmed reaped.
+        if (-not (Test-OrdinaryResourcePath $root -Directory)) { throw 'resource-stage-dir-missing' }
+        if ($VerifyOnly) {
+            $reason = 'resource-stage-unreadable'
+            $ops = @(Get-VerifiedResourceOps $root)
+        } else {
+            if ($Rc2Specified) {
+                $sourceTag = 'zip'
+                if ([string]::IsNullOrWhiteSpace($Rc2Zip)) { throw 'rc2-zip-absent' }
+                if (-not (Test-OrdinaryResourcePath $Rc2Zip)) { throw 'rc2-zip-absent' }
+                $reason = 'rc2-zip-unreadable'
+                $zipStream = [IO.File]::Open([IO.Path]::GetFullPath($Rc2Zip), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+                if ((Get-ResourceStreamSha $zipStream) -ne $Rc2ZipSha) { throw 'rc2-zip-sha-mismatch' }
+                $zipStream.Position = 0
+                Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+                $zip = [IO.Compression.ZipArchive]::new($zipStream, [IO.Compression.ZipArchiveMode]::Read, $true)
+            } else {
+                $sourceTag = 'directory'
+                if ([string]::IsNullOrEmpty($PackageRoot)) { $PackageRoot = Split-Path -Parent $PSScriptRoot }
+                $PackageRoot = [IO.Path]::GetFullPath($PackageRoot)
+                if (-not (Test-OrdinaryResourcePath $PackageRoot -Directory)) { throw 'resource-source-dir-missing' }
+            }
+            # Validate every source and destination before the first staged write.
+            # The same source handles stay locked through verification and copy.
+            foreach ($relative in $ResourcePins.Keys) {
+                $target = Get-StageTarget $root $relative
+                if (Test-OrdinaryResourcePath $target) { throw 'resource-stage-collision' }
+                $inputRecord = [pscustomobject]@{ relative = [string]$relative; entry = $null; stream = $null }
+                $inputs += $inputRecord
+                $reason = 'resource-source-unreadable'
+                if ($zip) {
+                    $entries = @($zip.Entries | Where-Object { $_.FullName -ceq $relative })
+                    if ($entries.Count -ne 1) { throw 'resource-entry-missing-or-duplicate' }
+                    $inputRecord.entry = $entries[0]; $inputRecord.stream = $entries[0].Open()
+                } else {
+                    $path = Join-Path $PackageRoot $relative
+                    if (-not (Test-OrdinaryResourcePath $path)) { throw 'resource-source-missing' }
+                    $inputRecord.stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+                }
+                if ((Get-ResourceStreamSha $inputRecord.stream) -ne $ResourcePins[$relative]) { throw 'resource-source-pin-mismatch' }
+                if ($zip) { $inputRecord.stream.Dispose(); $inputRecord.stream = $null }
+                else { $inputRecord.stream.Position = 0 }
+            }
+            $failureStatus = 'failed'; $reason = 'resource-stage-copy-failed'
+            foreach ($inputRecord in $inputs) {
+                $target = Get-StageTarget $root $inputRecord.relative
+                if (Test-OrdinaryResourcePath $target) { throw 'resource-stage-collision' }
+                $parent = Split-Path -Parent $target
+                $null = Test-OrdinaryResourcePath $parent -Directory
+                $null = [IO.Directory]::CreateDirectory($parent)
+                if (Test-OrdinaryResourcePath $target) { throw 'resource-stage-collision' }
+                if ($zip) { $inputRecord.stream = $inputRecord.entry.Open() }
+                $output = [IO.File]::Open($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                try { $inputRecord.stream.CopyTo($output); $output.Flush($true) }
+                finally { $output.Dispose() }
+            }
+            $reason = 'resource-stage-unreadable'
+            $ops = @(Get-VerifiedResourceOps $root)
+        }
+    } catch {
+        $failure = $_.Exception.Message
+        if ($failure -match '^[a-z][a-z0-9-]+$') { $reason = $failure }
+    } finally {
+        foreach ($inputRecord in $inputs) { if ($inputRecord.stream) { $inputRecord.stream.Dispose() } }
+        if ($zip) { $zip.Dispose() }
+        if ($zipStream) { $zipStream.Dispose() }
+    }
+    if ($failure -ne '') {
+        Fail-Named $failureStatus $reason '번들 리소스 검증/스테이징에 실패했습니다.' ('Bundled resource verification/staging failed: ' + $failure) 1
+    }
+    Write-Output ('resource_source=' + $sourceTag)
+    Write-Output ('resource_ops_json=' + (ConvertTo-Json -InputObject @($ops) -Depth 4 -Compress))
+    Write-Output ('resources_expected={0} resources_verified={1}' -f $ResourcePins.Count, $ops.Count)
+    $status = if ($VerifyOnly) { 'verified' } else { 'staged' }
+    Write-StatusLine $status 'resources-pinned' '번들 리소스 9개의 해시를 검증했습니다.' 'All nine bundled resource pins verified.'
+    exit 0
 }
 
 # --------------------------------------------------------------- UAL sources --
@@ -486,9 +635,12 @@ $argv = @($args)
 $action = ''
 $stageDir = ''
 $source = 'zip'
+$sourceSpecified = $false
 $version = 'latest'
 $consent = ''
 $rc2zip = ''
+$rc2Specified = $false
+$packageRoot = ''
 
 $i = 0
 if (($argv.Count -gt 0) -and (-not ([string]$argv[0]).StartsWith('-'))) {
@@ -497,28 +649,36 @@ if (($argv.Count -gt 0) -and (-not ([string]$argv[0]).StartsWith('-'))) {
 }
 while ($i -lt $argv.Count) {
     $key = ([string]$argv[$i]).ToLowerInvariant()
-    $needsValue = @('-action', '-stagedir', '-source', '-version', '-consent', '-rc2zip') -contains $key
+    $needsValue = @('-action', '-stagedir', '-source', '-version', '-consent', '-rc2zip', '-packageroot') -contains $key
     if (-not $needsValue) { Invalid-Invocation -Reason 'unknown-argument' -Detail ([string]$argv[$i]) }
     if (($i + 1) -ge $argv.Count) { Invalid-Invocation -Reason 'missing-value' -Detail ([string]$argv[$i]) }
     $val = [string]$argv[$i + 1]
     switch ($key) {
         '-action'   { $action = $val.ToLowerInvariant() }
         '-stagedir' { $stageDir = $val }
-        '-source'   { $source = $val.ToLowerInvariant() }
+        '-source'   { $source = $val.ToLowerInvariant(); $sourceSpecified = $true }
         '-version'  { $version = $val }
         '-consent'  { $consent = $val.ToLowerInvariant() }
-        '-rc2zip'   { $rc2zip = $val }
+        '-rc2zip'   { $rc2zip = $val; $rc2Specified = $true }
+        '-packageroot' { $packageRoot = $val }
     }
     $i += 2
 }
 
 if ([string]::IsNullOrWhiteSpace($action)) { Invalid-Invocation -Reason 'missing-action' }
-if ($action -notin @('ual', 'streamline', 'verify')) { Invalid-Invocation -Reason 'unknown-action' -Detail $action }
+if ($action -notin @('ual', 'streamline', 'verify', 'resources', 'resources-verify')) { Invalid-Invocation -Reason 'unknown-action' -Detail $action }
 if ([string]::IsNullOrWhiteSpace($stageDir)) { Invalid-Invocation -Reason 'missing-stagedir' }
 if ($source -notin @('zip', 'worktree')) { Invalid-Invocation -Reason 'bad-source' -Detail $source }
 if ($consent -notin @('', 'network')) { Invalid-Invocation -Reason 'bad-consent' -Detail $consent }
+if ($action -in @('resources', 'resources-verify')) {
+    if ($sourceSpecified) { Invalid-Invocation -Reason 'resource-source-use-rc2zip' }
+    if ($consent -ne '') { Invalid-Invocation -Reason 'resource-network-not-supported' }
+    if ($action -eq 'resources-verify' -and ($rc2Specified -or $packageRoot -ne '')) { Invalid-Invocation -Reason 'resource-verify-stage-only' }
+} elseif ($packageRoot -ne '') { Invalid-Invocation -Reason 'packageroot-resources-only' }
 
 switch ($action) {
+    'resources'  { Invoke-Resources -StageDir $stageDir -PackageRoot $packageRoot -Rc2Zip $rc2zip -Rc2Specified $rc2Specified }
+    'resources-verify' { Invoke-Resources -StageDir $stageDir -VerifyOnly }
     'ual'        { Invoke-StageUal -StageDir $stageDir -Source $source -Consent $consent -Rc2Zip $rc2zip }
     'streamline' { Invoke-StageStreamline -StageDir $stageDir -Version $version -Consent $consent }
     'verify'     { Invoke-Verify -StageDir $stageDir }

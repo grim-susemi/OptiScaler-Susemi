@@ -756,6 +756,17 @@ function Invoke-PortableSourceCases {
   $corePin = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
   $ualPin = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
   $ualRel = 'tools/asi-loader/Ultimate-ASI-Loader-x64.dll'
+  $resourcePins = [ordered]@{
+    'OptiScaler/amd_fidelityfx_framegeneration_dx12.dll'='02297beedd285e822d3a64f314cf00faf378dcec0edc47ff0c4dd71b3a8c2f18'
+    'OptiScaler/amd_fidelityfx_loader_dx12.dll'='e2d85aa05a9bd9ed8b38935fdf5199372cca6f74c12015143bb6f945ee1608aa'
+    'OptiScaler/amd_fidelityfx_upscaler_dx12.dll'='d0dcccc74a43c44ba435b7a369b456e0970d8a4464e4bd683119b374f2c9fb46'
+    'OptiScaler/amd_fidelityfx_vk.dll'='a1624cc4238fef046f30c4d80ce3f47be63fc5f5373f49e3ee9edb9960f54c78'
+    'OptiScaler/D3D12_OptiScaler/D3D12Core.dll'='07d286c306f8117321422affd9e6388c12d0fb4be1c7fc689d9e899324feeb24'
+    'OptiScaler/libxell.dll'='d2030dcd694fda8f2ec7e044b13e6db8f0b56d4ba9113a5efad334e3f3ded8c7'
+    'OptiScaler/libxess.dll'='251659dd84a3e84de67c886a4186e01f3eca49b00641906fe38bb6b807e5d5b7'
+    'OptiScaler/libxess_dx11.dll'='c7cfe86f0c9d94e4fb3696d3cd5035e2bbb6a8b1b0572f8b7395a4cdfd0c625e'
+    'OptiScaler/libxess_fg.dll'='ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27'
+  }
   $archive = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip'
   if ((Get-FileHash -LiteralPath $archive).Hash -ine '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a') { throw 'Explicit ZIP prerequisite pin mismatch' }
   foreach ($name in @('p1-unset', 'p1-empty', 'p2-missing-core', 'p2-missing-ual', 'p3-corrupt-core', 'p3-corrupt-ual', 'p3-unreadable-core', 'p3-unreadable-ual', 'p4-absent-zip', 'p4-corrupt-zip', 'p4-directory-zip', 'p5-pinned-zip')) {
@@ -765,6 +776,11 @@ function Invoke-PortableSourceCases {
       $dest = Join-Path $PackageRoot $rel
       New-Item -ItemType Directory -Path (Split-Path -Parent $dest) -Force | Out-Null
       Copy-Item -LiteralPath (Join-Path $sourceRoot $rel) -Destination $dest
+    }
+    foreach ($rel in $resourcePins.Keys) {
+      $dest = Join-Path $PackageRoot $rel
+      New-Item -ItemType Directory -Path (Split-Path -Parent $dest) -Force | Out-Null
+      New-Item -ItemType HardLink -Path $dest -Target (Join-Path $sourceRoot $rel) | Out-Null
     }
     $InstallerPath = Join-Path $PackageRoot 'Install_OptiScaler_windows.bat'
     $script:PortableOverride = $null
@@ -811,15 +827,22 @@ function Invoke-PortableSourceCases {
       $raw = [IO.File]::ReadAllText($files[0].FullName); $applied = $raw | ConvertFrom-Json
       $stagePins = @{}
       foreach ($op in $applied.ops) { $stagePins[$op.target] = $op.sourceSha }
-      $pass = (Test-FinalStatus $r 0 'installed' 'ok') -and $sourceProof -and ($applied.phase -eq 'applied') -and (@($applied.ops).Count -eq 2) -and
-        (@($applied.ops | Where-Object { $_.beforeExists -or $_.sourceSha -notin @($corePin, $ualPin) }).Count -eq 0) -and
+      $allPins = @($corePin,$ualPin) + @($resourcePins.Values)
+      $resourcesOk = $true
+      foreach ($rel in $resourcePins.Keys) {
+        $target = Join-Path $fx.Root $rel
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $target).Hash -ine $resourcePins[$rel] -or $stagePins[$target] -ne $resourcePins[$rel]) { $resourcesOk = $false }
+      }
+      $pass = (Test-FinalStatus $r 0 'installed' 'ok') -and $sourceProof -and ($applied.phase -eq 'applied') -and ($applied.schema_version -eq 2) -and (@($applied.ops).Count -eq 11) -and
+        (@($applied.ops | Where-Object { $_.beforeExists -or $_.state -ne 'applied' -or $_.sourceSha -notin $allPins }).Count -eq 0) -and $resourcesOk -and
         ((Get-FileHash -LiteralPath (Join-Path $fx.Root 'OptiScaler.asi')).Hash -ieq $corePin) -and ((Get-FileHash -LiteralPath (Join-Path $fx.Root 'winmm.dll')).Hash -ieq $ualPin) -and
         $r.stdout.Contains('trace| staged-core-sha=' + $corePin + ' staged-ual-sha=' + $ualPin) -and (Test-SameSnapshot $pb $pa)
       Write-GuidedReceipt $name $r $pass @{ sourceMode = $mode; override = $script:PortableOverride; before = $before; installed = $after; journals = $ja; journalRaw = $raw; stagePins = $stagePins; packageBefore = $pb; packageAfter = $pa }
       $remove = Invoke-GuidedChild -Answers @() -JournalRoot $journal -Arguments ('remove -Exe "' + $fx.Exe + '" -Consent yes -Lang en')
       $recoveredRaw = [IO.File]::ReadAllText($files[0].FullName); $recovered = $recoveredRaw | ConvertFrom-Json
       $restored = Get-FullMap $fx.Root
-      $pass = (Test-FinalStatus $remove 0 'removed' 'opcount-2') -and ($recovered.phase -eq 'recovered') -and ($recovered.txid -eq $applied.txid) -and (Test-SameSnapshot $before $restored)
+      $pass = (Test-FinalStatus $remove 0 'removed' 'opcount-11') -and ($recovered.phase -eq 'recovered') -and ($recovered.txid -eq $applied.txid) -and (Test-SameSnapshot $before $restored)
       Write-GuidedReceipt ($name + '-remove') $remove $pass @{ original = $before; restored = $restored; journalRaw = $recoveredRaw; journals = (Get-FullMap $journal); stagedDir = $applied.staged_dir; stageAbsent = -not (Test-Path -LiteralPath $applied.staged_dir) }
     }
   }
@@ -883,50 +906,65 @@ if (-not $st.Skipped) {
   }
 }
 
-# (d) missing-backup-refusal — pre-seeded receipt whose backup dir does not exist.
-$fx = New-GameFixture 'missing-backup-refusal' 'GameA/bin64/GameA.exe' @('winmm.dll', 'OptiScaler.asi', 'ReShade.asi') 0xA021
-$missingBackup = Join-Path $fx.BinDir '_susemi_backup_missing'
-$receiptObj = [ordered]@{ version = 1; exe = 'GameA.exe'; backupDir = $missingBackup;
-                          installedUtc = '2026-09-27T00:00:00Z'; owner = 'susemi_installer.ps1' }
-($receiptObj | ConvertTo-Json) | Set-Content -LiteralPath (Join-Path $fx.BinDir '_susemi_install_receipt.json') -Encoding UTF8
-$st = Invoke-FixtureCase 'missing-backup-refusal' ('remove -Exe "' + $fx.Exe + '"') $fx
-if (-not $st.Skipped) {
-  if ($st.TimedOut) {
-    Emit-Row 'missing-backup-refusal' $st.Command $st.Exit 'refusal-bytes-unchanged' 'timeout' $false `
-      ('child exceeded 60000 ms and was killed; stdout=[' + $st.Stdout + '] stderr=[' + $st.Stderr + ']')
-  } elseif (($st.Exit -ne 0) -and $st.Same) {
-    Emit-Row 'missing-backup-refusal' $st.Command $st.Exit 'refusal-bytes-unchanged' 'refusal-bytes-unchanged' $true `
-      'receipt present but backup dir missing; remove refused with zero writes'
-  } elseif ($st.Exit -eq 0) {
-    Emit-Row 'missing-backup-refusal' $st.Command $st.Exit 'refusal-bytes-unchanged' 'unexpected-success' $false `
-      'missing backup must refuse (nonzero exit); launcher reported success'
-  } else {
-    Emit-Row 'missing-backup-refusal' $st.Command $st.Exit 'refusal-bytes-unchanged' 'refusal-but-bytes-changed' $false `
-      'refused but fixture bytes changed; refusal must be write-free'
-  }
+# (d) missing-backup-refusal - delete the real recorded preimage of our install.
+if ($launcherExists) {
+  $fx = New-X64Fixture 'missing-backup-refusal'
+  [IO.File]::WriteAllText((Join-Path $fx.Root 'OptiScaler.asi'), 'PRIOR-ASI-BASELINE-D')
+  $local = Join-Path $scratch 'missing-backup-local'
+  $journal = Join-Path $local 'susemi-installer\journal'
+  New-Item -ItemType Directory -Path $journal -Force | Out-Null
+  $savedLocal = $env:LOCALAPPDATA
+  try {
+  # This invocation's harness is itself an owned child; only its descendants
+  # inherit this normal environment path. No persistent/user environment write.
+  $env:LOCALAPPDATA = $local
+  $install = Invoke-GuidedChild -Answers @() -JournalRoot '' -Arguments ('install -Exe "' + $fx.Exe + '" -Consent yes -Route asi -Lang en')
+  if (-not (Test-FinalStatus $install 0 'installed' 'ok')) { throw ('Backup fixture install failed: ' + $install.stdout + $install.stderr) }
+  $files = @(Get-ChildItem -LiteralPath $journal -File -Filter '*.json')
+  if ($files.Count -ne 1) { throw 'Backup fixture requires exactly one own journal' }
+  $record = [IO.File]::ReadAllText($files[0].FullName) | ConvertFrom-Json
+  $op = @($record.ops | Where-Object { $_.target -eq (Join-Path $fx.Root 'OptiScaler.asi') -and $_.op -eq 'replace' })
+  if ($op.Count -ne 1 -or -not (Test-Path -LiteralPath $op[0].backupPath -PathType Leaf) -or
+      (Get-FileHash -LiteralPath $op[0].backupPath).Hash -ine $op[0].beforeSha) { throw 'Missing valid recorded preimage for backup fixture' }
+  $backup = [string]$op[0].backupPath
+  Remove-Item -LiteralPath $backup
+  $before = Get-FullMap $fx.Root; $jb = Get-FullMap $journal
+  $remove = Invoke-GuidedChild -Answers @() -JournalRoot '' -Arguments ('remove -Exe "' + $fx.Exe + '" -Consent yes -Lang en')
+  $after = Get-FullMap $fx.Root; $ja = Get-FullMap $journal
+  $pass = (Test-FinalStatus $remove 1 'refused' 'backup-missing') -and (Test-SameSnapshot $before $after) -and (Test-SameSnapshot $jb $ja)
+  Write-GuidedReceipt 'missing-backup-refusal' $remove $pass @{ installCommand = $install.command; installExit = $install.exit; journal = $files[0].FullName; backup = $backup; before = $before; after = $after; journalsBefore = $jb; journalsAfter = $ja }
+  } finally { $env:LOCALAPPDATA = $savedLocal }
 }
 
-# (e) stale-uninstaller-false-pass — stale Remove_OptiScaler.bat must NOT read as success.
-$fx = New-GameFixture 'stale-uninstaller-false-pass' 'GameA/bin64/GameA.exe' @('winmm.dll', 'OptiScaler.asi', 'ReShade.asi') 0xA031
-$staleBat = Join-Path $fx.BinDir 'Remove_OptiScaler.bat'
-Set-Content -LiteralPath $staleBat -Value "@echo off`r`necho stale uninstaller`r`n" -Encoding Ascii
-$staleSha = (Get-FileHash -LiteralPath $staleBat -Algorithm SHA256).Hash
-$st = Invoke-FixtureCase 'stale-uninstaller-false-pass' ('remove -Exe "' + $fx.Exe + '"') $fx
-if (-not $st.Skipped) {
-  $staleSame = ((Get-FileHash -LiteralPath $staleBat -Algorithm SHA256).Hash -eq $staleSha)
-  if ($st.TimedOut) {
-    Emit-Row 'stale-uninstaller-false-pass' $st.Command $st.Exit 'no-false-pass' 'timeout' $false `
-      ('child exceeded 60000 ms and was killed; stdout=[' + $st.Stdout + '] stderr=[' + $st.Stderr + ']')
-  } elseif (($st.Exit -eq 0) -and $st.Same) {
-    Emit-Row 'stale-uninstaller-false-pass' $st.Command $st.Exit 'no-false-pass' 'false-pass' $false `
-      'exit 0 with bytes untouched while stale Remove_OptiScaler.bat sits in bindir: must not count as success'
-  } elseif (($st.Exit -ne 0) -and $st.Same -and $staleSame) {
-    Emit-Row 'stale-uninstaller-false-pass' $st.Command $st.Exit 'no-false-pass' 'no-false-pass' $true `
-      ('nonzero exit, stale uninstaller byte-identical, no other writes; exit=' + $st.Exit)
-  } else {
-    Emit-Row 'stale-uninstaller-false-pass' $st.Command $st.Exit 'no-false-pass' 'bytes-changed' $false `
-      ('fixture bytes changed (same=' + $st.Same + ' staleSame=' + $staleSame + '); exit=' + $st.Exit)
-  }
+# (e) stale-uninstaller-false-pass - stale BAT cannot bypass a tampered preimage.
+if ($launcherExists) {
+  $fx = New-X64Fixture 'stale-uninstaller-false-pass'
+  [IO.File]::WriteAllText((Join-Path $fx.Root 'OptiScaler.asi'), 'PRIOR-ASI-BASELINE-E')
+  $staleBat = Join-Path $fx.Root 'Remove_OptiScaler.bat'
+  [IO.File]::WriteAllText($staleBat, "@echo off`r`necho stale uninstaller`r`n")
+  $staleSha = (Get-FileHash -LiteralPath $staleBat).Hash
+  $local = Join-Path $scratch 'stale-backup-local'
+  $journal = Join-Path $local 'susemi-installer\journal'
+  New-Item -ItemType Directory -Path $journal -Force | Out-Null
+  $savedLocal = $env:LOCALAPPDATA
+  try {
+  $env:LOCALAPPDATA = $local
+  $install = Invoke-GuidedChild -Answers @() -JournalRoot '' -Arguments ('install -Exe "' + $fx.Exe + '" -Consent yes -Route asi -Lang en')
+  if (-not (Test-FinalStatus $install 0 'installed' 'ok')) { throw ('Backup fixture install failed: ' + $install.stdout + $install.stderr) }
+  $files = @(Get-ChildItem -LiteralPath $journal -File -Filter '*.json')
+  if ($files.Count -ne 1) { throw 'Backup fixture requires exactly one own journal' }
+  $record = [IO.File]::ReadAllText($files[0].FullName) | ConvertFrom-Json
+  $op = @($record.ops | Where-Object { $_.target -eq (Join-Path $fx.Root 'OptiScaler.asi') -and $_.op -eq 'replace' })
+  if ($op.Count -ne 1 -or -not (Test-Path -LiteralPath $op[0].backupPath -PathType Leaf) -or
+      (Get-FileHash -LiteralPath $op[0].backupPath).Hash -ine $op[0].beforeSha) { throw 'Missing valid recorded preimage for backup fixture' }
+  $backup = [string]$op[0].backupPath
+  [IO.File]::WriteAllText($backup, 'TAMPERED-PREIMAGE-E')
+  $before = Get-FullMap $fx.Root; $jb = Get-FullMap $journal
+  $remove = Invoke-GuidedChild -Answers @() -JournalRoot '' -Arguments ('remove -Exe "' + $fx.Exe + '" -Consent yes -Lang en')
+  $after = Get-FullMap $fx.Root; $ja = Get-FullMap $journal
+  $pass = (Test-FinalStatus $remove 1 'refused' 'backup-tampered') -and (Test-SameSnapshot $before $after) -and (Test-SameSnapshot $jb $ja) -and ((Get-FileHash -LiteralPath $staleBat).Hash -eq $staleSha)
+  Write-GuidedReceipt 'stale-uninstaller-false-pass' $remove $pass @{ installCommand = $install.command; installExit = $install.exit; journal = $files[0].FullName; backup = $backup; staleSha = $staleSha; before = $before; after = $after; journalsBefore = $jb; journalsAfter = $ja }
+  } finally { $env:LOCALAPPDATA = $savedLocal }
 }
 
 if ($launcherExists) { Invoke-GuidedSafetyCases }
