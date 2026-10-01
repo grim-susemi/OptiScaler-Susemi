@@ -244,6 +244,26 @@ function Get-PeValid {
   } catch { return $false }
 }
 
+function Initialize-UalProfileReader {
+  if ('Susemi.UalProfile' -as [type]) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+namespace Susemi {
+  public static class UalProfile {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
+    public static extern uint GetPrivateProfileIntW(string section, string key, int fallback, string file);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
+    public static extern uint GetPrivateProfileStringW(string section, string key, string fallback, StringBuilder value, uint size, string file);
+    public static uint Integer(string key, uint fallback, string file) {
+      return GetPrivateProfileIntW("globalsets", key, unchecked((int)fallback), file);
+    }
+  }
+}
+'@ | Out-Null
+}
+
 function Get-DiagnosisContext {
   # Real read-only diagnosis (no writes, no network, no game launch). Builds the
   # full identity + effective-config state; Invoke-Diagnose renders it and the
@@ -265,7 +285,7 @@ function Get-DiagnosisContext {
     effLoadPlugins = '1'; srcLoadPlugins = '(default)'
     effScriptsOnly = '0'; srcScriptsOnly = '(default)'
     effExtra = 'modloader\modloader.asi'; srcExtra = '(default)'
-    extraOverridden = $false; extraOverrideFile = ''; extraDefs = @()
+    extraOverridden = $false; extraOverrideFile = ''; extraDefs = @(); configReason = ''
     effList = @(); isReshadeOnly = $false
     proxyNames = @('dxgi.dll','d3d11.dll','d3d12.dll','dinput8.dll','winmm.dll','version.dll','wininet.dll','winhttp.dll','dsound.dll','dbghelp.dll')
   }
@@ -360,49 +380,71 @@ function Get-DiagnosisContext {
   $extraOverridden = $false; $extraOverrideFile = ''
   $extraDefs = @()
   $candFiles = @()
-  if ($hasLoader) {
-    $candFiles = @(
+  if (-not $hasLoader) { $loaderBase = 'winmm' }
+  $candFiles = @(
       (Join-Path $exeDir ($loaderBase + '.ini')),
       (Join-Path $exeDir 'global.ini'),
       (Join-Path $exeDir (Join-Path 'scripts' 'global.ini')),
       (Join-Path $exeDir (Join-Path 'plugins' 'global.ini')),
       (Join-Path $exeDir (Join-Path 'update' 'global.ini'))
-    )
-  }
+  )
   $ctx.candFiles = $candFiles
+  Initialize-UalProfileReader
   $candIdx = -1
   foreach ($cf in $candFiles) {
     $candIdx++
-    if (-not (Test-Path -LiteralPath $cf -PathType Leaf)) { continue }
-    $section = ''
-    try { $lines = @(Get-Content -LiteralPath $cf -ErrorAction Stop) } catch { continue }
-    foreach ($ln in $lines) {
-      $t = ([string]$ln).Trim()
-      if (($t -eq '') -or $t.StartsWith(';') -or $t.StartsWith('#')) { continue }
-      if ($t.StartsWith('[') -and $t.EndsWith(']')) { $section = $t.Substring(1, $t.Length - 2).Trim(); continue }
-      if ($section -ieq 'globalsets') {
-        $eq = $t.IndexOf('=')
-        if ($eq -lt 0) { continue }
-        $k = ([string]$t.Substring(0, $eq)).Trim().ToLowerInvariant()
-        $v = ([string]$t.Substring($eq + 1)).Trim()
-        $sc = $v.IndexOf(';')
-        if ($sc -ge 0) { $v = $v.Substring(0, $sc).Trim() }
-        if ($k -eq 'loadplugins') { $effLoadPlugins = $v; $srcLoadPlugins = $cf }
-        elseif ($k -eq 'loadfromscriptsonly') { $effScriptsOnly = $v; $srcScriptsOnly = $cf }
-        elseif ($k -eq 'loadextraplugins') {
-          if (($srcExtra -ne '(default)') -and ($effExtra -ne $v)) { $extraOverridden = $true; $extraOverrideFile = $cf }
-          $effExtra = $v; $srcExtra = $cf
-          $extraDefs += @{ file = $cf; value = $v; index = $candIdx }
-        }
+    # The pinned loader uses MAX_PATH paths/string buffers. Never certify an
+    # unsupported path, unreadable file, or ambiguous full buffer as defaults.
+    if ($cf.Length -ge 260) { $ctx.configReason = 'ual-config-path-limit'; break }
+    try {
+      $item = Get-Item -LiteralPath $cf -Force -ErrorAction Stop
+    } catch [System.Management.Automation.ItemNotFoundException] { continue }
+    catch { $ctx.configReason = 'ual-config-unreadable'; break }
+    try {
+      if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'unsupported config entry' }
+      $stream = [IO.File]::Open($cf, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite)
+      $stream.Dispose()
+    } catch { $ctx.configReason = 'ual-config-unreadable'; break }
+    foreach ($key in @('loadplugins', 'loadfromscriptsonly')) {
+      # Two native defaults distinguish a contributing integer from a missing
+      # or empty key, even when its value equals the carried default.
+      $a = [Susemi.UalProfile]::Integer($key, 0, $cf)
+      $b = [Susemi.UalProfile]::Integer($key, 1, $cf)
+      if ($key -eq 'loadplugins') {
+        $effLoadPlugins = [string][Susemi.UalProfile]::Integer($key, [uint32]$effLoadPlugins, $cf)
+        if ($a -eq $b) { $srcLoadPlugins = $cf }
+      } else {
+        $effScriptsOnly = [string][Susemi.UalProfile]::Integer($key, [uint32]$effScriptsOnly, $cf)
+        if ($a -eq $b) { $srcScriptsOnly = $cf }
       }
     }
+    $value = New-Object System.Text.StringBuilder 260
+    $length = [Susemi.UalProfile]::GetPrivateProfileStringW('globalsets', 'loadextraplugins', $effExtra, $value, 260, $cf)
+    if ($length -ge 259) { $ctx.configReason = 'ual-config-string-limit'; break }
+    $probeA = New-Object System.Text.StringBuilder 260
+    $probeB = New-Object System.Text.StringBuilder 260
+    $null = [Susemi.UalProfile]::GetPrivateProfileStringW('globalsets', 'loadextraplugins', '__susemi_missing_a__', $probeA, 260, $cf)
+    $null = [Susemi.UalProfile]::GetPrivateProfileStringW('globalsets', 'loadextraplugins', '__susemi_missing_b__', $probeB, 260, $cf)
+    if ($probeA.ToString() -eq $probeB.ToString()) {
+      $srcExtra = $cf
+      $extraDefs += @{ file = $cf; value = $value.ToString(); index = $candIdx }
+    }
+    $effExtra = $value.ToString()
   }
+  $extraOverridden = ($extraDefs.Count -gt 1 -and $effExtra -ne $extraDefs[0].value)
+  if ($extraOverridden) { $extraOverrideFile = $srcExtra }
   $ctx.effLoadPlugins = $effLoadPlugins; $ctx.srcLoadPlugins = $srcLoadPlugins
   $ctx.effScriptsOnly = $effScriptsOnly; $ctx.srcScriptsOnly = $srcScriptsOnly
   $ctx.effExtra = $effExtra; $ctx.srcExtra = $srcExtra
   $ctx.extraOverridden = $extraOverridden; $ctx.extraOverrideFile = $extraOverrideFile
   $ctx.extraDefs = $extraDefs
-  $effList = @($effExtra.Split('|') | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -ne '' })
+  $entries = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($entry in $effExtra.Split('|')) {
+    $clean = $entry.Trim([char[]]" `t`r`n")
+    if ($clean.Length -ge 2 -and $clean[0] -eq '"' -and $clean[$clean.Length - 1] -eq '"') { $clean = $clean.Substring(1, $clean.Length - 2) }
+    if ($clean -ne '' -and -not $entries.Contains($clean)) { $entries.Add($clean) }
+  }
+  $effList = @($entries.ToArray())
   $isReshadeOnly = (($effList.Count -eq 1) -and ($effList[0] -ieq 'ReShade.asi'))
   $ctx.effList = $effList; $ctx.isReshadeOnly = $isReshadeOnly
 
@@ -429,7 +471,12 @@ function Get-DiagnosisContext {
     $ctx.status = 'game-verification-required'; $ctx.reason = 'game-running'
     return $ctx
   }
-  if ($reshadeValid -and $isReshadeOnly -and ($lp -eq '1') -and ($lso -eq '0') -and (-not $ualAmbiguous)) {
+  if ($ctx.configReason -ne '') {
+    $ctx.status = 'conflict'; $ctx.reason = $ctx.configReason
+    $ctx.human = 'Static UAL configuration could not be verified: ' + $ctx.configReason
+    return $ctx
+  }
+  if ($hasLoader -and $reshadeValid -and $isReshadeOnly -and ([uint32]$lp -ne 0) -and (([uint32]$lso -eq 0) -or $reshadeReferenced) -and (-not $ualAmbiguous)) {
     if ($ko) { $ctx.human = "준비 완료: ReShade.asi 로드 체인이 정상입니다 (loadextraplugins=$effExtra @ $srcExtra)." } else { $ctx.human = "ready: ReShade.asi load chain is configured (loadextraplugins=$effExtra @ $srcExtra)." }
     $ctx.status = 'ready'; $ctx.reason = 'ready'; $ctx.code = 0
     return $ctx
@@ -437,9 +484,9 @@ function Get-DiagnosisContext {
   $conflictWhy = ''
   if ($ualAmbiguous) {
     if ($ko) { $conflictWhy = "충돌: UAL 로더가 여러 개 식별됨: $(($ualNames | Sort-Object -Unique) -join ', ')" } else { $conflictWhy = "conflict: ambiguous UAL loader: $(($ualNames | Sort-Object -Unique) -join ', ')" }
-  } elseif ($hasLoader -and ($lp -eq '0')) {
+  } elseif ([uint32]$lp -eq 0) {
     if ($ko) { $conflictWhy = "충돌: $srcLoadPlugins 의 loadplugins=0 (ReShade가 로드되지 않음)" } else { $conflictWhy = "conflict: loadplugins=0 in $srcLoadPlugins (ReShade will not load)" }
-  } elseif ($hasLoader -and ($lso -eq '1')) {
+  } elseif ($hasLoader -and ([uint32]$lso -ne 0) -and -not $reshadeReferenced -and $effList -notcontains 'OptiScaler.asi') {
     if ($ko) { $conflictWhy = "충돌: $srcScriptsOnly 의 loadfromscriptsonly=1 (ReShade가 로드되지 않음)" } else { $conflictWhy = "conflict: loadfromscriptsonly=1 in $srcScriptsOnly (ReShade will not load)" }
   } elseif ($hasLoader -and $extraOverridden -and (-not $isReshadeOnly)) {
     if ($ko) { $conflictWhy = "충돌: $extraOverrideFile 가 loadextraplugins를 '$effExtra'로 덮어씀 (ReShade.asi 아님)" } else { $conflictWhy = "conflict: $extraOverrideFile overrides loadextraplugins to '$effExtra' (not ReShade.asi)" }
@@ -668,8 +715,9 @@ function Test-ReshadeFirstEligible {
   if ($Ctx.ualAmbiguous) { $r.reason = 'competing-loaders'; return $r }
   if ($Ctx.hasLoader -and (-not ($Ctx.loaderBase -ieq 'winmm'))) { $r.reason = 'loader-not-winmm'; return $r }
   if ((Test-Path -LiteralPath (Join-Path $Ctx.exeDir 'modloader.asi')) -or (Test-Path -LiteralPath (Join-Path $Ctx.exeDir (Join-Path 'modloader' 'modloader.asi')))) { $r.reason = 'modloader-dependency'; return $r }
-  if ($Ctx.hasLoader -and ($Ctx.effLoadPlugins.Trim() -ne '1')) { $r.reason = 'loadplugins-disabled'; return $r }
-  if ($Ctx.hasLoader -and ($Ctx.effScriptsOnly.Trim() -ne '0')) { $r.reason = 'scripts-only-enabled'; return $r }
+  if ($Ctx.configReason -ne '') { $r.reason = $Ctx.configReason; return $r }
+  if ([uint32]$Ctx.effLoadPlugins -eq 0) { $r.reason = 'loadplugins-disabled'; return $r }
+  if ([uint32]$Ctx.effScriptsOnly -ne 0 -and $Ctx.effList -notcontains 'OptiScaler.asi') { $r.reason = 'scripts-only-enabled'; return $r }
 
   if ($Ctx.reshadeValid) {
     # identity already present as ReShade.asi
@@ -685,7 +733,7 @@ function Test-ReshadeFirstEligible {
   $defs = @($Ctx.extraDefs)
   if ($defs.Count -eq 0) { $r.eligible = $true; return $r }
   $effDef = $defs[$defs.Count - 1]
-  $list = @([string]$effDef.value.Split('|') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+  $list = @($Ctx.effList)
   if ($list.Count -eq 1 -and $list[0] -ieq 'ReShade.asi') { $r.goalEffective = $true; $r.eligible = $true; return $r }
   if ((@($defs | Where-Object { $_.index -gt 0 }).Count) -gt 0) {
     $later = @($defs | Where-Object { $_.index -gt 0 })[-1]
@@ -705,11 +753,9 @@ function Get-LaterOverrideInfo {
   if ($defs.Count -eq 0) { return @{ present = $false; file = ''; value = '' } }
   $later = @($defs | Where-Object { $_.index -gt 0 })
   if ($later.Count -eq 0) { return @{ present = $false; file = ''; value = '' } }
-  foreach ($d in $later) {
-    $list = @([string]$d.value.Split('|') | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
-    if (-not ($list.Count -eq 1 -and $list[0] -ieq 'ReShade.asi')) {
-      return @{ present = $true; file = [string]$d.file; value = [string]$d.value }
-    }
+  $d = $later[-1]
+  if (-not $Ctx.isReshadeOnly) {
+    return @{ present = $true; file = [string]$d.file; value = [string]$d.value }
   }
   return @{ present = $false; file = ''; value = '' }
 }
@@ -732,6 +778,10 @@ function Test-GuidedInstallEligible {
   param($Ctx)
   $result = @{ eligible = $false; conflict = $false }
   if (-not $Ctx.isX64 -or $Ctx.gameRunning) { return $result }
+  if ($Ctx.configReason -ne '' -or [uint32]$Ctx.effLoadPlugins -eq 0 -or
+      ([uint32]$Ctx.effScriptsOnly -ne 0 -and $Ctx.effList -notcontains 'OptiScaler.asi')) {
+    $result.conflict = $true; return $result
+  }
   if ($null -eq $Ctx.installTargets) { $result.conflict = $true; return $result }
   foreach ($target in @($Ctx.installTargets)) {
     if (($target.attributes -band [IO.FileAttributes]::Directory) -or
@@ -1190,6 +1240,16 @@ function Invoke-InstallTransaction {
     return 1
   }
   $gameDir = Split-Path -Parent $resolved
+  # Fresh prospective winmm configuration after consent, including bare folders.
+  # No staging, target writes or journal creation may precede this gate.
+  $configCtx = Get-DiagnosisContext -Exe $resolved -Lang $Lang -M $M
+  $configReason = $configCtx.configReason
+  if ([uint32]$configCtx.effLoadPlugins -eq 0) { $configReason = 'loadplugins-disabled' }
+  elseif ([uint32]$configCtx.effScriptsOnly -ne 0 -and $configCtx.effList -notcontains 'OptiScaler.asi') { $configReason = 'scripts-only-enabled' }
+  if ($configReason -ne '') {
+    Write-StatusLine -Status 'refused' -Reason $configReason -Human ('Static UAL configuration prevents this install; nothing was written: ' + $configReason)
+    return 1
+  }
 
   # ---- T8: ReShade-first eligibility + INI ownership/preview + conversion.
   # Every decision below happens BEFORE any mutation, so a refusal here leaves
@@ -1501,10 +1561,17 @@ function Invoke-InstallTransaction {
       Write-Output 'reshade-first=no-op reason=already-configured'
     }
 
+    $postCtx = Get-DiagnosisContext -Exe $rawExe -Lang $Lang -M $M
+    Write-Output ('static-config| loadplugins=' + $postCtx.effLoadPlugins + ' source=' + $postCtx.srcLoadPlugins + ' scripts-only=' + $postCtx.effScriptsOnly + ' extra-source=' + $postCtx.srcExtra)
+    Write-Output 'game-runtime=unverified'
+    if ($postCtx.configReason -ne '' -or [uint32]$postCtx.effLoadPlugins -eq 0 -or
+        ([uint32]$postCtx.effScriptsOnly -ne 0 -and $postCtx.effList -notcontains 'OptiScaler.asi')) {
+      $rfFinalStatus = 'installed-with-warning'; $rfFinalReason = 'ual-config-changed'
+      $rfFinalHuman = 'Installed bytes verified; static UAL configuration changed or could not be verified. Game runtime remains unverified.'
+    }
     if ($ReshadeFirst) {
       # Re-read all five candidates AFTER apply: a later global.ini may defeat the
       # key. Name the file+key and never edit that file.
-      $postCtx = Get-DiagnosisContext -Exe $rawExe -Lang $Lang -M $M
       $laterPost = Get-LaterOverrideInfo -Ctx $postCtx
       $goalOk = ($postCtx.effList.Count -eq 1 -and $postCtx.effList[0] -ieq 'ReShade.asi')
       Write-Output ('reshade-first=post-diagnosis status=' + $postCtx.status + ' reason=' + $postCtx.reason + ' eff-extra=' + $postCtx.effExtra)

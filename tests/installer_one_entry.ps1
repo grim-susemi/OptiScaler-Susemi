@@ -551,7 +551,7 @@ function Invoke-GuidedSafetyCases {
   $tokens = $null; $errors = $null
   $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PackageRoot 'tools/susemi_installer.ps1'), [ref]$tokens, [ref]$errors)
   if ($errors.Count -ne 0) { throw 'Coordinator parse errors' }
-  foreach ($name in @('Get-PeValid', 'Get-DiagnosisContext', 'Test-GuidedInstallEligible')) {
+  foreach ($name in @('Get-PeValid', 'Initialize-UalProfileReader', 'Get-DiagnosisContext', 'Test-GuidedInstallEligible')) {
     $fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     if ($null -eq $fn) { throw "Missing actual function: $name" }
     . ([scriptblock]::Create($fn.Extent.Text))

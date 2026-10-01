@@ -343,6 +343,134 @@ function Invoke-Scenario([string]$name, [scriptblock]$body) {
   End-Case
 }
 
+# Native profile semantics through the actual production functions, not a text
+# parser mock. Loading definitions avoids the coordinator's CLI dispatch only.
+$tokens = $null; $parseErrors = $null
+$coordAst = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count -ne 0) { throw 'Coordinator parse errors' }
+foreach ($name in @('Get-PeValid', 'Initialize-UalProfileReader', 'Get-DiagnosisContext', 'Test-GuidedInstallEligible', 'Get-LaterOverrideInfo', 'Test-ReshadeFirstEligible', 'Invoke-InstallOffer', 'Write-StatusLine')) {
+  $fn = $coordAst.Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+  if ($null -eq $fn) { throw ('Missing production function: ' + $name) }
+  . ([scriptblock]::Create($fn.Extent.Text))
+}
+
+Invoke-Scenario 'j-native-profile-semantics' {
+  $game = Join-Path $ScratchRoot 'j'
+  New-Item -ItemType Directory -Path $game -Force | Out-Null
+  Copy-Item -LiteralPath $notepadExe -Destination (Join-Path $game 'GameA.exe')
+  $ini = Join-Path $game 'winmm.ini'
+  $rows = @(
+    @{ name='duplicates'; text="loadplugins=0`nloadplugins=1`nloadextraplugins=OptiScaler.asi`nloadextraplugins=ReShade.asi"; lp='0'; so='0'; extra='OptiScaler.asi'; goal=$false },
+    @{ name='quote'; text='loadextraplugins="ReShade.asi"'; lp='1'; so='0'; extra='ReShade.asi'; goal=$true },
+    @{ name='semicolon'; text='loadextraplugins=ReShade.asi ; comment'; lp='1'; so='0'; extra='ReShade.asi ; comment'; goal=$false },
+    @{ name='int2'; text="loadplugins=2`nloadfromscriptsonly=2"; lp='2'; so='2'; extra='modloader\modloader.asi'; goal=$false },
+    @{ name='hex'; text='loadplugins=0x1'; lp='1'; so='0'; extra='modloader\modloader.asi'; goal=$false },
+    @{ name='empty-int'; text='loadplugins='; lp='1'; so='0'; extra='modloader\modloader.asi'; goal=$false },
+    @{ name='empty-string'; text='loadextraplugins='; lp='1'; so='0'; extra=''; goal=$false },
+    @{ name='per-entry-quotes'; text='loadextraplugins="ReShade.asi"|"OptiScaler.asi"'; lp='1'; so='0'; extra='ReShade.asi"|"OptiScaler.asi'; goal=$false },
+    @{ name='duplicate-extra-entry'; text='loadextraplugins=ReShade.asi|ReShade.asi'; lp='1'; so='0'; extra='ReShade.asi|ReShade.asi'; goal=$true },
+    @{ name='samefile-section'; text="loadextraplugins=OptiScaler.asi`n[globalsets]`nloadextraplugins=ReShade.asi"; lp='1'; so='0'; extra='OptiScaler.asi'; goal=$false }
+  )
+  foreach ($row in $rows) {
+    [IO.File]::WriteAllText($ini, "[globalsets]`n" + $row.text + "`n", [Text.Encoding]::ASCII)
+    $pre = ShaMap $game
+    $ctx = Get-DiagnosisContext -Exe (Join-Path $game 'GameA.exe') -Lang en -M @{}
+    Say ($row.name + ' lp=' + $ctx.effLoadPlugins + ' so=' + $ctx.effScriptsOnly + ' extra=[' + $ctx.effExtra + '] source=' + $ctx.srcExtra)
+    Assert ($ctx.configReason -eq '' -and $ctx.effLoadPlugins -eq $row.lp -and $ctx.effScriptsOnly -eq $row.so -and $ctx.effExtra -eq $row.extra -and $ctx.isReshadeOnly -eq $row.goal) ($row.name + ' native values')
+    Assert (MapsEqual $pre (ShaMap $game)) ($row.name + ' read-only')
+  }
+  [IO.File]::WriteAllText($ini, "[globalsets]`nloadplugins=0`nloadextraplugins=ReShade.asi`n", [Text.Encoding]::ASCII)
+  [IO.File]::WriteAllText((Join-Path $game 'global.ini'), "[globalsets]`nloadplugins=`nloadextraplugins=ReShade.asi`n", [Text.Encoding]::ASCII)
+  $ctx = Get-DiagnosisContext -Exe (Join-Path $game 'GameA.exe') -Lang en -M @{}
+  Assert ($ctx.effLoadPlugins -eq '0' -and $ctx.srcLoadPlugins -eq $ini) 'empty later integer carries value and provenance'
+  Assert ($ctx.srcExtra -eq (Join-Path $game 'global.ini')) 'same-valued later string still owns effective provenance'
+  [IO.File]::WriteAllText((Join-Path $game 'global.ini'), "[globalsets]`nloadextraplugins=" + ('a' * 259) + "`n", [Text.Encoding]::ASCII)
+  $ctx = Get-DiagnosisContext -Exe (Join-Path $game 'GameA.exe') -Lang en -M @{}
+  Assert ($ctx.configReason -eq 'ual-config-string-limit') 'MAX_PATH full buffer refuses ambiguous truncation'
+  Remove-Item -LiteralPath (Join-Path $game 'global.ini')
+  New-Item -ItemType Directory -Path (Join-Path $game 'global.ini') | Out-Null
+  $ctx = Get-DiagnosisContext -Exe (Join-Path $game 'GameA.exe') -Lang en -M @{}
+  Assert ($ctx.configReason -eq 'ual-config-unreadable') 'non-file config cannot silently become defaults'
+}
+
+Invoke-Scenario 'k-bare-config-and-postconsent' {
+  $game = Join-Path $ScratchRoot 'k'
+  New-Item -ItemType Directory -Path $game -Force | Out-Null
+  $exe = Join-Path $game 'GameA.exe'
+  Copy-Item -LiteralPath $notepadExe -Destination $exe
+  $ini = Join-Path $game 'global.ini'
+  [IO.File]::WriteAllText($ini, "[globalsets]`nloadplugins=0`n", [Text.Encoding]::ASCII)
+  $pre = ShaMap $game; $journals = ShaMap $script:journalRoot
+  $d = RunDiagnose $exe
+  Assert ($d.exit -eq 1 -and (StatusLine $d.stdout) -eq 'status=conflict reason=ual-config-conflict') 'bare disabled config conflicts before UAL exists'
+  $r = RunInstallerArgs @('install', '-Exe', $exe, '-Consent', 'yes', '-Lang', 'en') ''
+  Assert ($r.exit -eq 1 -and $r.stdout -match 'status=refused') 'bare disabled config refuses install'
+  Assert ((MapsEqual $pre (ShaMap $game)) -and (MapsEqual $journals (ShaMap $script:journalRoot))) 'bare refusal has zero target and journal writes'
+  Remove-Item -LiteralPath $ini
+  $before = Get-DiagnosisContext -Exe $exe -Lang en -M @{}
+  Assert ((Test-GuidedInstallEligible $before).eligible) 'bare initial consent offer is eligible'
+  # The prompt is the exact synchronous consent boundary. Mutate only config
+  # when consent is returned; real fresh diagnosis/gate must catch it.
+  function Read-Host {
+    param($Prompt)
+    [IO.File]::WriteAllText($ini, "[globalsets]`nloadplugins=0`n", [Text.Encoding]::ASCII)
+    return 'yes'
+  }
+  $out = @(Invoke-InstallOffer -Exe $exe -Lang en -M @{ InstallAsk='consent'; ReshadeFirstSkip='{0}'; NextActions=@{ 'guided-target-conflict'='blocked' } })
+  Assert ($out -contains 'status=refused reason=guided-target-conflict' -and $out[-1] -eq 1) 'config introduced at consent is refused by fresh real gate'
+  Assert (-not (Test-Path (Join-Path $game 'winmm.dll')) -and (MapsEqual $journals (ShaMap $script:journalRoot))) 'postconsent refusal precedes target and journal writes'
+  [IO.File]::WriteAllText($ini, "[globalsets]`nloadfromscriptsonly=2`nloadextraplugins=OptiScaler.asi`n", [Text.Encoding]::ASCII)
+  $ctx = Get-DiagnosisContext -Exe $exe -Lang en -M @{}
+  Assert ((Test-GuidedInstallEligible $ctx).eligible) 'scripts-only permits explicit root OptiScaler extra'
+  Copy-Item -LiteralPath (Join-Path $script:srcDir 'winmm.dll') -Destination (Join-Path $game 'winmm.dll')
+  $ctx = Get-DiagnosisContext -Exe $exe -Lang en -M @{}
+  Assert ($ctx.status -ne 'conflict') 'existing UAL also accepts explicit root OptiScaler extra'
+  $iniSha = Sha256 $ini
+  $r = RunInstallerArgs @('install', '-Exe', $exe, '-Consent', 'yes', '-Lang', 'en') ''
+  Assert ($r.exit -eq 0 -and (StatusLine $r.stdout) -eq 'status=installed reason=ok' -and (Sha256 $ini) -eq $iniSha) 'scripts-only explicit core capability installs without config edits'
+  [IO.File]::WriteAllText($ini, "[globalsets]`nloadfromscriptsonly=2`nloadextraplugins=ReShade.asi`n", [Text.Encoding]::ASCII)
+  $ctx = Get-DiagnosisContext -Exe $exe -Lang en -M @{}
+  Assert (-not (Test-GuidedInstallEligible $ctx).eligible) 'scripts-only without core capability refuses'
+
+  # Isolate the root-core guard from missing ReShade or an existing loader:
+  # prove eligibility first, then change only scripts-only from 0 to 2.
+  $noCoreGame = Join-Path $ScratchRoot 'k-no-core'
+  New-Item -ItemType Directory -Path $noCoreGame -Force | Out-Null
+  $noCoreExe = Join-Path $noCoreGame 'GameA.exe'
+  Copy-Item -LiteralPath $notepadExe -Destination $noCoreExe
+  $noCoreIni = Join-Path $noCoreGame 'global.ini'
+  [IO.File]::WriteAllText($noCoreIni, "[globalsets]`nloadplugins=1`nloadfromscriptsonly=0`nloadextraplugins=`n", [Text.Encoding]::ASCII)
+  $noCoreCtx = Get-DiagnosisContext -Exe $noCoreExe -Lang en -M @{}
+  $noCoreGate = Test-GuidedInstallEligible $noCoreCtx
+  Assert ($noCoreCtx.configReason -eq '' -and $noCoreCtx.effLoadPlugins -eq '1' -and $noCoreCtx.effScriptsOnly -eq '0' -and $noCoreCtx.effExtra -eq '' -and $noCoreGate.eligible -and -not $noCoreGate.conflict) 'bare no-core fixture is otherwise eligible with scripts-only 0'
+  Assert (-not (Test-Path -LiteralPath (Join-Path $noCoreGame 'winmm.dll')) -and -not (Test-Path -LiteralPath (Join-Path $noCoreGame 'OptiScaler.asi')) -and -not (Test-Path -LiteralPath (Join-Path $noCoreGame 'ReShade.asi'))) 'bare no-core fixture has no loader, core or ReShade target'
+  [IO.File]::WriteAllText($noCoreIni, "[globalsets]`nloadplugins=1`nloadfromscriptsonly=2`nloadextraplugins=`n", [Text.Encoding]::ASCII)
+  $noCorePre = ShaMap $noCoreGame
+  $noCoreJournals = ShaMap $script:journalRoot
+  $noCoreDefault = ShaMap $defaultJournalRoot
+  $noCoreCtx = Get-DiagnosisContext -Exe $noCoreExe -Lang en -M @{}
+  $noCoreGate = Test-GuidedInstallEligible $noCoreCtx
+  Assert ($noCoreCtx.configReason -eq '' -and $noCoreCtx.effLoadPlugins -eq '1' -and $noCoreCtx.effScriptsOnly -eq '2' -and $noCoreCtx.effExtra -eq '' -and -not $noCoreGate.eligible -and $noCoreGate.conflict) 'bare scripts-only 2 without explicit core raises the guided config-conflict flag'
+  $noCoreRun = RunInstallerArgs @('install', '-Exe', $noCoreExe, '-Consent', 'yes', '-Lang', 'en') ''
+  Assert ($noCoreRun.exit -eq 1 -and -not $noCoreRun.timedOut -and (StatusLine $noCoreRun.stdout) -eq 'status=refused reason=scripts-only-enabled') 'bare no-core real CLI refuses specifically scripts-only-enabled'
+  Assert (MapsEqual $noCorePre (ShaMap $noCoreGame)) 'bare no-core refusal preserves the complete target SHA map'
+  Assert (MapsEqual $noCoreJournals (ShaMap $script:journalRoot)) 'bare no-core refusal preserves the complete private journal SHA map'
+  Assert (MapsEqual $noCoreDefault (ShaMap $defaultJournalRoot)) 'bare no-core refusal preserves the complete default journal SHA map'
+}
+
+Invoke-Scenario 'l-restored-final-goal' {
+  $game = New-BaseGame 'l'
+  [IO.File]::WriteAllBytes((Join-Path $game 'ReShade.asi'), (PeStubBytes $stubSeedF101))
+  [IO.File]::WriteAllText((Join-Path $game 'winmm.ini'), "[globalsets]`nloadextraplugins=ReShade.asi`n", [Text.Encoding]::ASCII)
+  [IO.File]::WriteAllText((Join-Path $game 'global.ini'), "[globalsets]`nloadextraplugins=OptiScaler.asi`n", [Text.Encoding]::ASCII)
+  New-Item -ItemType Directory -Path (Join-Path $game 'plugins') -Force | Out-Null
+  [IO.File]::WriteAllText((Join-Path $game 'plugins\global.ini'), "[globalsets]`nloadextraplugins=ReShade.asi`n", [Text.Encoding]::ASCII)
+  $pre = ShaMap $game; $journals = ShaMap $script:journalRoot
+  $r = RunInstallRf (Join-Path $game 'GameA.exe') 'asi' 'no'
+  Assert ($r.exit -eq 0 -and (StatusLine $r.stdout) -eq 'status=no-op reason=already-configured') 'final restored goal is no-op, not sticky warning'
+  Assert ((MapsEqual $pre (ShaMap $game)) -and (MapsEqual $journals (ShaMap $script:journalRoot))) 'restored goal changes no config, targets or journals'
+}
+
 # ------------------------------------------------------------------ a + i ---
 
 Invoke-Scenario 'a-fresh-create-ready' {
