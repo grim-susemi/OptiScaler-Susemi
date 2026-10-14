@@ -21,6 +21,9 @@
 // the trap at all. Exit 1 = trap detected as designed, exit 2 = the check is blind.
 // ============================================================================
 
+// The production PCH sets this before Windows headers; the standalone chart
+// probe includes the same production headers without that PCH.
+#define NOMINMAX
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -38,6 +41,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "menu/Localization.h"
+#include "dlssnr/DlssNr_PipelineUi.h"
 
 // ---------------------------------------------------------------------------
 // Real production code, extracted verbatim at run time from the sources.
@@ -498,7 +502,9 @@ static void RunCases(const std::string& root, const std::string& evidenceDir, co
               "caller buffer and range unchanged after CalcTextSize/RenderText/RenderTextWrapped");
     }
 
-    // 8) No dlssnr UI file touches the localization unit at all.
+    // 8) NR rendering does not take ownership of the selected language.
+    // Display-only aliases and explicit custom drawing are allowed; behavioral
+    // ID probes above/below keep their original English identity contract.
     {
         Progress("8 seam-ui-files");
         const char* files[] = { "OptiScaler/dlssnr/DlssNr_Menu.cpp", "OptiScaler/dlssnr/DlssNr_MenuControls.cpp",
@@ -515,15 +521,14 @@ static void RunCases(const std::string& root, const std::string& evidenceDir, co
                 offenders += std::format(" missing:{}", file);
                 continue;
             }
-            if (text.find("Localization") != std::string::npos || text.find("SetLanguage") != std::string::npos ||
-                text.find("Translate(") != std::string::npos)
+            if (text.find("SetLanguage(") != std::string::npos)
             {
                 clean = false;
-                offenders += std::format(" references-localization:{}", file);
+                offenders += std::format(" changes-language:{}", file);
             }
         }
-        Check("seam-ui-files-keep-english-labels", clean,
-              clean ? std::format("{} dlssnr UI files free of localization calls", std::size(files)) : offenders);
+        Check("nr-ui-language-owner", clean,
+              clean ? std::format("{} dlssnr UI files preserve the selected language", std::size(files)) : offenders);
     }
 
     // 9) The R7 production label-key path still receives the English label.
@@ -715,6 +720,112 @@ static void RunCases(const std::string& root, const std::string& evidenceDir, co
                               raw.has_value() ? *raw : std::string("(absent)"), stored,
                               Localization::LanguageIndex(stored)));
         }
+    }
+
+    // A display alias must not change the English widget ID or leak outward.
+    {
+        Progress("nr-display-alias-id");
+        bool stable = false;
+        bool translated = false;
+        bool restored = false;
+        Frame([&]
+        {
+            Localization::SetLanguage("ko");
+            const std::string before = Localization::Translate("Intensity");
+            {
+                const Localization::DisplayAlias display("Intensity", "NR intensity");
+                float value = 1.0f;
+                ImGui::SliderFloat("Intensity", &value, 0.0f, 2.0f);
+                stable = ImGui::GetItemID() == ImGui::GetID("Intensity");
+                const char* target = Localization::Lookup("NR intensity");
+                translated = target && Localization::Translate("Intensity") == target && before != target;
+            }
+            restored = Localization::Translate("Intensity") == before;
+        });
+        Check("nr-display-alias-id", stable && translated && restored,
+              "display catalog bytes substituted; English slider ID and outer lookup retained");
+        Localization::SetLanguage("en");
+    }
+
+    // Hit the actual checkbox, not just a separately computed translated ID.
+    {
+        Progress("nr-route-checkbox-ids");
+        ImVec2 point;
+        Frame([&] { point = ImGui::GetCursorScreenPos(); });
+        const char* labels[] = { "Generate model before upscale", "Apply NR to the finished picture",
+                                "Generate before upscale, apply after upscale" };
+        ImGuiID ids[2][3] {};
+        bool actual = true;
+        for (int language = 0; language < 2; ++language)
+        for (int i = 0; i < 3; ++i)
+        {
+            ImGui::GetIO().AddMousePosEvent(point.x + 2, point.y + 2);
+            Frame([&]
+            {
+                Localization::SetLanguage(language == 0 ? "en" : "ko");
+                bool value = false;
+                DlssNr::PipelineUi::CheckboxWrapped(labels[i], &value, 400);
+                ids[language][i] = ImGui::GetCurrentContext()->HoveredId;
+                ImGui::PushID(labels[i]);
+                actual = actual && ids[language][i] == ImGui::GetID("##toggle") && ids[language][i] != 0;
+                ImGui::PopID();
+            });
+        }
+        for (int i = 0; i < 3; ++i)
+            actual = actual && ids[0][i] == ids[1][i];
+        Check("nr-route-checkbox-ids", actual, std::format("actual hovered route IDs {:08X} {:08X} {:08X}",
+              ids[0][0], ids[0][1], ids[0][2]));
+        Localization::SetLanguage("en");
+    }
+
+    // Actual custom chart text must emit the translated title's glyph UVs.
+    // Matching UVs, not prose, distinguishes Korean drawing from raw AddText.
+    {
+        Progress("nr-custom-chart-ko-glyphs");
+        bool found = false;
+        int referenceVertices = 0;
+        // Warm the actual chart's glyphs before comparing UVs. Atlas baking is
+        // deterministic frame work, not a timed readiness wait.
+        Frame([&]
+        {
+            Localization::SetLanguage("ko");
+            DlssNr::PipelineUi::View view;
+            DlssNr::PipelineUi::Section selected = DlssNr::PipelineUi::Section::Placement;
+            DlssNr::PipelineUi::Draw(view, selected);
+        });
+        Frame([&]
+        {
+            Localization::SetLanguage("ko");
+            DlssNr::PipelineUi::View view;
+            DlssNr::PipelineUi::Section selected = DlssNr::PipelineUi::Section::Placement;
+            auto* draw = ImGui::GetWindowDrawList();
+            const auto referenceAt = ImGui::GetCursorScreenPos();
+            const int start = draw->VtxBuffer.Size;
+            DlssNr::PipelineUi::Draw(view, selected);
+            const int stop = draw->VtxBuffer.Size;
+            const std::string translated = Localization::Translate("Game input");
+            const int reference = draw->VtxBuffer.Size;
+            draw->AddText(referenceAt, IM_COL32_WHITE, translated.c_str());
+            const int count = draw->VtxBuffer.Size - reference;
+            referenceVertices = count;
+            for (int i = start; count > 0 && i + count <= stop; ++i)
+            {
+                bool match = true;
+                for (int j = 0; j < count; ++j)
+                {
+                    const auto a = draw->VtxBuffer[i + j].uv;
+                    const auto b = draw->VtxBuffer[reference + j].uv;
+                    match = match && a.x == b.x && a.y == b.y;
+                }
+                found = found || match;
+            }
+            found = found && translated != "Game input";
+        });
+        Check("nr-custom-reference-nonblank", referenceVertices > 0,
+              std::format("visible translated reference emitted {} vertices", referenceVertices));
+        Check("nr-custom-chart-ko-glyphs", found,
+              "production chart contains the translated first title's glyph UV sequence");
+        Localization::SetLanguage("en");
     }
 
     // 19) A new RTX 20/30 unlock string renders Korean through the real seams.

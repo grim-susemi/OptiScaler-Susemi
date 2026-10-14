@@ -1,4 +1,5 @@
 # Run from a Visual Studio x64 developer shell. No game or NVIDIA NR runtime is loaded.
+param([Parameter(Mandatory=$true)][string]$AdmissionPath, [switch]$RetireProductChecks)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot/..").Path
 $out = Join-Path ([IO.Path]::GetTempPath()) ('nr-prerelease-' + [guid]::NewGuid())
@@ -10,9 +11,9 @@ try {
     & "$PSScriptRoot/run_nr_late_slot_pool.ps1"
     if ($LASTEXITCODE) { throw "run_nr_late_slot_pool failed (exit $LASTEXITCODE)" }
     & "$PSScriptRoot/dlssnr_proxy/run.ps1"
-    & "$PSScriptRoot/mfg_unlock/run.ps1"
-    & "$PSScriptRoot/run_nr_pipeline_capture.ps1"
-    & "$PSScriptRoot/run_nr_streamline_hooks.ps1"
+    & "$PSScriptRoot/mfg_unlock/run.ps1" -OutputRoot (Join-Path $out 'mfg')
+    & "$PSScriptRoot/run_nr_pipeline_capture.ps1" -EvidenceRoot $out -AdmissionPath $AdmissionPath -RetireProductChecks:$RetireProductChecks
+    & "$PSScriptRoot/run_nr_streamline_hooks.ps1" -EvidenceRoot $out
     & "$PSScriptRoot/run_sl_pair_detours_smoke.ps1"
     if ($LASTEXITCODE) { throw "run_sl_pair_detours_smoke failed (exit $LASTEXITCODE)" }
     function RunSmoke($name, $libraries, $arguments = @(), $includes = @()) {
@@ -25,13 +26,14 @@ try {
     $shader = "$repo/OptiScaler/shaders/dlssnr/precompile/dlssnr.hlsl"
     RunSmoke 'nr_skin_shader_smoke' @('d3d11.lib', 'd3dcompiler.lib') @($shader) @('/IOptiScaler/include')
     RunSmoke 'nr_replace_detail_smoke' @('d3d11.lib', 'd3dcompiler.lib') @($shader)
-    RunSmoke 'nr_resize_shader_smoke' @('d3d11.lib')
+    RunSmoke 'nr_resize_shader_smoke' @('d3d11.lib', 'd3d12.lib', 'dxgi.lib')
     RunSmoke 'nr_exposure_shader_smoke' @('d3d11.lib', 'd3dcompiler.lib')
     RunSmoke 'nr_residual_rr_smoke' @('d3d11.lib', 'd3dcompiler.lib')
     RunSmoke 'nr_active_color_smoke' @('d3d12.lib', 'dxgi.lib')
     RunSmoke 'nr_finished_queue_smoke' @('d3d12.lib', 'dxgi.lib')
+    RunSmoke 'nr_streamline_picture_smoke' @('d3d12.lib', 'dxgi.lib', 'dxguid.lib')
     RunSmoke 'nr_vulkan_shader_smoke' @('OptiScaler/library/vulkan/vulkan-1.lib') `
         @("$repo/OptiScaler/shaders/dlssnr/precompile/DlssNr_Shader_Vk.spv") `
-        @('/IOptiScaler', '/Iexternal/vulkan/include', '/Iexternal/nvngx_dlss_sdk', '/Iexternal/spdlog/include')
+        @('/IOptiScaler', '/IC:/omo-research/optiscaler-hybrid-port-v0.7.1/external/vulkan/include', '/Iexternal/nvngx_dlss_sdk', '/IC:/omo-research/optiscaler-hybrid-port-v0.7.1/external/spdlog/include')
     Write-Output 'NR prerelease checks passed.'
 } finally { Pop-Location }

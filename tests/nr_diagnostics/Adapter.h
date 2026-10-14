@@ -16,18 +16,36 @@
 struct version_t { unsigned major=0,minor=0,patch=0; };
 inline std::mutex logMutex;
 inline std::vector<std::string> diagnosticLines;
+inline void (*diagnosticSink)(const std::string&)=nullptr;
 template<class... T> void TestLog(std::format_string<T...> fmt,T&&... args) {
  auto line=std::format(fmt,std::forward<T>(args)...);
  std::lock_guard lock(logMutex); diagnosticLines.push_back(line);
+ if(diagnosticSink)diagnosticSink(line);
 }
 #define LOG_INFO(...) TestLog(__VA_ARGS__)
-inline std::string wstring_to_string(const std::wstring& s) { return {s.begin(),s.end()}; }
-struct Config { std::optional<std::wstring> MainDllPath; static Config* Instance(){static Config c;return &c;} };
+inline std::string wstring_to_string(const std::wstring& s) {
+ if(s.empty())return {};
+ int count=WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),nullptr,0,nullptr,nullptr);
+ std::string text(count,'\0');
+ WideCharToMultiByte(CP_UTF8,0,s.data(),(int)s.size(),text.data(),count,nullptr,nullptr);
+ return text;
+}
+struct FixtureBool { bool value=false; bool value_or_default()const{return value;} };
+struct Config { std::optional<std::wstring> MainDllPath; std::optional<std::string> FGDLSSGAdaTemporalFix;
+ FixtureBool DlssNrEnabled;
+ static Config* Instance(){static Config c;return &c;} };
 struct State { std::vector<std::wstring> NVNGX_FeatureInfo_Paths; static State& Instance(){static State s;return s;} };
 namespace Util {
+inline std::filesystem::path dllPathOverride;
+inline void (*onFileVersion)()=nullptr;
 inline std::filesystem::path ExePath(){wchar_t p[32768]{};GetModuleFileNameW(nullptr,p,32768);return p;}
-inline std::filesystem::path DllPath(){return ExePath();}
+inline std::filesystem::path DllPath(){return dllPathOverride.empty()?ExePath():dllPathOverride;}
 inline std::wstring ToLower(std::wstring s){std::transform(s.begin(),s.end(),s.begin(),::towlower);return s;}
-inline bool GetFileVersion(const std::wstring&,version_t*){return false;}
+inline bool GetFileVersion(const std::wstring&,version_t*){if(onFileVersion)onFileVersion();return false;}
 }
 struct NVNGXProxy { inline static std::wstring driver; static std::wstring NVNGXModule_Path(){return driver;} };
+struct CachedGpu { std::string name; std::filesystem::path driverStore; };
+struct IdentifyGpu {
+ inline static std::optional<CachedGpu> cached;
+ static std::optional<CachedGpu> findCachedGpu(LUID){return cached;}
+};

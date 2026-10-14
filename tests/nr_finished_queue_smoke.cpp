@@ -30,6 +30,7 @@ int main() try
     Expect(event != nullptr, "Could not create completion event");
     for (UINT64 frame = 1; frame <= 16; ++frame)
     {
+        Check(inputReady->SetEventOnCompletion(frame, event));
         // A submitted producer signal can sit behind a wait for this presentation.
         Check(render->Wait(presentGate.Get(), frame));
         Check(render->Signal(inputReady.Get(), frame));
@@ -39,7 +40,6 @@ int main() try
         const bool olderInputReady = DlssNr::FinishedInputReady(false, completed, frame - 1);
         // Do not enqueue present->Wait(inputReady, frame): that would deadlock these queues.
         Check(present->Signal(presentGate.Get(), frame));
-        Check(inputReady->SetEventOnCompletion(frame, event));
         const auto result = WaitForSingleObject(event, 5000);
         if (result != WAIT_OBJECT_0) presentGate->Signal(frame); // cleanup even on regression failure
         Expect(result == WAIT_OBJECT_0, "Present/render queues stalled");

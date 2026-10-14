@@ -103,6 +103,7 @@ struct NrState
     {
         void Cancel() {}
     } late;
+    std::shared_ptr<Late> pipelineSession;
 };
 struct DlssNr_Dx12
 {

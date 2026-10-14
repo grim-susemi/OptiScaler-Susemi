@@ -4,8 +4,14 @@
 #include <map>
 #include <string>
 #include <variant>
+#include <optional>
+#include <vector>
 #include <nvsdk_ngx_params.h>
+#include "../../OptiScaler/dlssnr/DlssNr_Options.h"
 
+#ifdef NR_FILTER_INTEGRATION
+#include "FilterIntegrationServices.h"
+#else
 struct ID3D12Device {};
 struct ID3D12CommandList {};
 struct ID3D12GraphicsCommandList : ID3D12CommandList {};
@@ -14,6 +20,7 @@ struct ID3D12CommandQueue
 {
 };
 struct ID3D12Resource {};
+#endif
 
 #define LOG_INFO(...) ((void) 0)
 #define LOG_ERROR(...) ((void) 0)
@@ -27,10 +34,38 @@ template <typename T> struct Setting
 class Config
 {
   public:
-    Setting<int> DlssNrPreset, DlssNrStyle;
+    Setting<unsigned int> DlssNrPreset, DlssNrStyle;
     Setting<float> DlssNrIntensity { 0.5f }, DlssNrLocalStructure { 0.25f },
                    DlssNrLocalTone { 0.75f }, DlssNrSkinStructure { 0.375f };
     Setting<bool> DlssNrAutoMask { true };
+    Setting<bool> DlssNrRunBeforeSr, DlssNrFinishedPicture, DlssNrDeferredDlss,
+                  DlssNrResidualAcrossRr, DlssNrAutomaticUICorrection;
+    Setting<DlssNr::InputFilter> DlssNrInputFilter { DlssNr::InputFilter::Area };
+    Setting<DlssNr::SignalEncoding> DlssNrSignalEncoding { DlssNr::SignalEncoding::Legacy };
+#ifdef NR_FILTER_INTEGRATION
+    Setting<bool> RestoreComputeSignature, RestoreGraphicSignature, DlssNrUnlockPasses,
+                  DlssNrHoldFrame, DlssNrShowSkinMask;
+    Setting<bool> DlssNrApplyModel { true }, DlssNrCompareSwap;
+    Setting<unsigned> DlssNrPasses { 1 }, DlssNrWhitePointSource, DlssNrReversibleMode,
+                      DlssNrDebugView, DlssNrTransfer, DlssNrCompare, DlssNrSkinProtection;
+    Setting<float> DlssNrWorkingScale { 1 }, DlssNrWhitePointScale { 1 },
+        DlssNrTransferStrength { 1 }, DlssNrColourStrength { 1 }, DlssNrMaxRatio { 8 },
+        DlssNrSkinDetail { 1 }, DlssNrSkinColour { 1 },
+        DlssNrEnvironmentDetail { 1 }, DlssNrEnvironmentColour { 1 },
+        DlssNrCompareSplit { .5f }, DlssNrCompareZoom { 1 }, DlssNrReplaceDetailStrength,
+        DlssNrWhitePointTrim { 1 }, DlssNrAutoExposureTrim { 1 },
+        DlssNrAutoExposureHighlightProtection;
+    Setting<std::string> DlssNrAutoExposureTrimAnchors, DlssNrExposureTrimAnchors;
+    Setting<Scaler> DlssNrScalingDownscaler { Scaler::Bicubic };
+    std::optional<unsigned> ColorResourceBarrier, OutputResourceBarrier;
+#endif
+    struct PassOverride
+    {
+        std::optional<unsigned int> preset, style;
+        std::optional<float> intensity, structure, tone, skin;
+        std::optional<bool> autoMask;
+    };
+    PassOverride DlssNrPassOverrides[29];
     static Config* Instance() { static Config config; return &config; }
 };
 
@@ -69,6 +104,7 @@ inline NVSDK_NGX_Result createResult = NVSDK_NGX_Result_Success;
 inline NVSDK_NGX_Result evaluateResult = NVSDK_NGX_Result_Success;
 inline Params* latest = nullptr;
 inline std::map<NVSDK_NGX_Handle*, NVSDK_NGX_Parameter*> handles;
+inline std::vector<std::map<std::string, Params::Value>> creationValues;
 
 inline NVSDK_NGX_Result Allocate(NVSDK_NGX_Parameter** params)
 {
@@ -89,6 +125,7 @@ inline NVSDK_NGX_Result Create(ID3D12GraphicsCommandList*, NVSDK_NGX_Feature fea
 {
     assert((int) feature == 18);
     ++creations;
+    creationValues.push_back(static_cast<Params*>(params)->values);
     if (createResult != NVSDK_NGX_Result_Success)
         return createResult;
     *handle = new NVSDK_NGX_Handle {};
@@ -103,9 +140,17 @@ inline NVSDK_NGX_Result Release(NVSDK_NGX_Handle* handle)
     return NVSDK_NGX_Result_Success;
 }
 inline NVSDK_NGX_Result Evaluate(ID3D12GraphicsCommandList*, const NVSDK_NGX_Handle*,
-                                  const NVSDK_NGX_Parameter*, void*)
+                                  const NVSDK_NGX_Parameter* params, void*)
 {
     ++evaluations;
+#ifdef NR_FILTER_INTEGRATION
+    ID3D12Resource *source = nullptr, *output = nullptr;
+    assert(params->Get("DLSSNR.Color", &source) == NVSDK_NGX_Result_Success);
+    assert(params->Get("DLSSNR.Output", &output) == NVSDK_NGX_Result_Success);
+    FilterFixture::Record(1, source, nullptr, nullptr, output, nullptr);
+#else
+    (void)params;
+#endif
     return evaluateResult;
 }
 } // namespace Mock

@@ -83,8 +83,10 @@ int main() try
         cmd->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
         barrier(textures[3].Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
         barrier(picture.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_COMMON);
-        Check(cmd->Close()); ID3D12CommandList* lists[] {cmd.Get()}; queue->ExecuteCommandLists(1, lists);
-        Check(queue->Signal(fence.Get(), frame + 1)); Check(fence->SetEventOnCompletion(frame + 1, event));
+        Check(cmd->Close()); ID3D12CommandList* lists[] {cmd.Get()};
+        Check(fence->SetEventOnCompletion(frame + 1, event));
+        queue->ExecuteCommandLists(1, lists);
+        Check(queue->Signal(fence.Get(), frame + 1));
         Expect(WaitForSingleObject(event, 5000) == WAIT_OBJECT_0, "GPU timeout");
         unsigned char* bytes = nullptr; Check(readback->Map(0, nullptr, reinterpret_cast<void**>(&bytes)));
         const bool visible = bytes[1] == 255; readback->Unmap(0, nullptr);

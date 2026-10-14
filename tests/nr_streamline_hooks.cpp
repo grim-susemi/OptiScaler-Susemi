@@ -4,9 +4,11 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstring>
+#include <atomic>
 #include <cstdio>
 #include <stdexcept>
 #include "../OptiScaler/dlssnr/DlssNr_StreamlinePicture.h"
+#include "../OptiScaler/dlssnr/DlssNr_MfgObserver.h"
 using Microsoft::WRL::ComPtr;
 static void Check(HRESULT hr) { if (FAILED(hr)) throw std::runtime_error("D3D call failed"); }
 static void Expect(bool ok, const char* why) { if (!ok) throw std::runtime_error(why); }
@@ -36,6 +38,7 @@ static bool expectPq = false;
 static constexpr GUID colorSpaceKey = { 0x34a31e7b, 0x84c5, 0x44ef, { 0xa7, 0x4d, 0x6b, 0xd3, 0x60, 0x8c, 0xe5, 0x22 } };
 namespace DlssNr
 {
+void SkipFinishedPicture(IDXGISwapChain*) {}
 void ApplyToStreamlinePicture(IDXGISwapChain* swapchain, ID3D12Resource* picture, ID3D12CommandQueue* queue)
 {
     Expect(picture == expectedPicture, "Mixed local and game plugin buffers");
