@@ -20,7 +20,7 @@ float2 NrResizeChroma(float3 colour)
 
 float3 NrResizeLinear(float3 colour)
 {
-    return gPassthrough != 0 ? colour : SrgbToLinear(colour);
+    return DecodeSignal(colour);
 }
 
 float3 NrPairedResizeField(int2 pixel, int2 size)

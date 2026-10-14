@@ -4,6 +4,7 @@
 
 #include "NVNGX_DLSS.h"
 #include "NgxFeatureRegistry.h"
+#include <dlssnr/DlssNr_MfgObserverNgx.h>
 #include "NVNGX_Parameter.h"
 #include "proxies/NVNGX_Proxy.h"
 #include <upscalers/dlss/DLSSFeature_Dx12.h>
@@ -1180,7 +1181,14 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
 
             // SR and RR handles are always IFeature_Dx12 instances. This branch contains only
             // unrelated native NGX features, which must never run Neural Rendering.
-            return NVNGXProxy::D3D12_EvaluateFeature()(InCmdList, InFeatureHandle, InParameters, InCallback);
+            const auto observation = DlssNr::MfgObserver::Ngx(
+                DlssNr::MfgObserver::Seam::NgxNative,
+                reinterpret_cast<uintptr_t>(NVNGXProxy::D3D12_EvaluateFeature()),
+                InFeatureHandle, InParameters, InCmdList,
+                tracked.feature ? static_cast<uint32_t>(*tracked.feature) : 0, tracked.feature.has_value());
+            const auto result = NVNGXProxy::D3D12_EvaluateFeature()(InCmdList, InFeatureHandle, InParameters, InCallback);
+            DlssNr::MfgObserver::Complete(observation, result);
+            return result;
         }
 
         LOG_DEBUG("Native DLSS EvaluateFeature not available for handle {}", handleId);

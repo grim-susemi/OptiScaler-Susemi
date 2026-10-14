@@ -68,8 +68,11 @@ struct ModelStateDx12
     unsigned int width = 0;
     unsigned int height = 0;
     bool beforeUpscale = false;
+    bool finishedPicture = false;
     bool rayReconstruction = false;
     bool reset = true;
+    unsigned int effectiveInputFilter = 0;
+    unsigned int effectiveSignalEncoding = 0;
 
     // The preset, style and strengths each live feature was created with.
     ModelSettings builtSettings[DlssNr::MaxPassCount] {};

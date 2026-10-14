@@ -1,12 +1,24 @@
 #pragma once
 #include <Config.h>
 #include "DlssNr_ModelParameters.h"
+#include "DlssNr_Placement.h"
 #include <algorithm>
 #include <cmath>
 
 namespace DlssNr::Profiles
 {
-inline ModelSettings PassSettings(const Config& cfg, unsigned int pass)
+inline unsigned int CreationUICorrection(const Config& cfg, bool supported, UICorrectionInput input)
+{
+    const auto placement = ResolvePlacement(cfg.DlssNrRunBeforeSr.value_or_default(),
+        cfg.DlssNrDeferredDlss.value_or_default(), cfg.DlssNrResidualAcrossRr.value_or_default(),
+        cfg.DlssNrFinishedPicture.value_or_default());
+    return ResolveUICorrection(cfg.DlssNrAutomaticUICorrection.value_or_default(), placement, supported, input);
+}
+
+// Shared/Vulkan callers retain the legacy creation request unless a supported
+// creation caller supplies an actual resolved value.
+inline ModelSettings PassSettings(const Config& cfg, unsigned int pass, unsigned int uiCorrection = 1u,
+                                  unsigned int effectiveInputFilter = 0u, unsigned int effectiveSignalEncoding = 0u)
 {
     ModelSettings result { cfg.DlssNrPreset.value_or_default(), cfg.DlssNrStyle.value_or_default(),
                           cfg.DlssNrIntensity.value_or_default(),
@@ -14,6 +26,9 @@ inline ModelSettings PassSettings(const Config& cfg, unsigned int pass)
                           pass == 0 ? cfg.DlssNrLocalTone.value_or_default() : 0.0f,
                           cfg.DlssNrSkinStructure.value_or_default(),
                           cfg.DlssNrAutoMask.value_or_default() };
+    result.uiCorrection = uiCorrection;
+    result.effectiveInputFilter = effectiveInputFilter;
+    result.effectiveSignalEncoding = effectiveSignalEncoding;
     if (pass > 0 && pass <= std::size(cfg.DlssNrPassOverrides))
     {
         const auto& extra = cfg.DlssNrPassOverrides[pass - 1];

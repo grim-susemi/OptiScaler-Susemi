@@ -96,6 +96,18 @@
 #include <tchar.h>
 #include <dwmapi.h>
 
+#ifdef OPTISCALER_NR_SELF_TEST
+#include "../../../tests/nr_addon_host/ForbiddenStartup.h"
+#include "../../menu/input/input_system.h"
+// Observe the actual backend call sites and refuse before an OS desktop read.
+// These names are local to this translation unit, never a global API hook.
+#define GetCursorPos NrAddonHost::BackendGetCursorPos
+#define GetKeyState NrAddonHost::BackendGetKeyState
+#define GetForegroundWindow NrAddonHost::BackendGetForegroundWindow
+#define WindowFromPoint NrAddonHost::BackendWindowFromPoint
+#define SetCursorPos NrAddonHost::BackendSetCursorPos
+#endif
+
 // Using XInput for gamepad (will load DLL dynamically)
 #ifndef IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
 #include <xinput.h>
@@ -186,6 +198,9 @@ static bool ImGui_ImplWin32_InitEx(void* hwnd, bool platform_has_own_dc)
     io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;          // We can honor io.WantSetMousePos requests (optional, rarely used)
     io.BackendFlags |= ImGuiBackendFlags_PlatformHasViewports;    // We can create multi-viewports on the Platform side (optional)
     io.BackendFlags |= ImGuiBackendFlags_HasMouseHoveredViewport; // We can call io.AddMouseViewportEvent() with correct data (optional)
+#ifdef OPTISCALER_NR_SELF_TEST
+    io.BackendFlags &= ~(ImGuiBackendFlags_HasSetMousePos | ImGuiBackendFlags_HasMouseHoveredViewport);
+#endif
 
     bd->hWnd = (HWND)hwnd;
     bd->TicksPerSecond = perf_frequency;
@@ -296,6 +311,18 @@ static bool ImGui_ImplWin32_UpdateMouseCursor(ImGuiIO& io, ImGuiMouseCursor imgu
 
 static bool IsVkDown(int vk)
 {
+#ifdef OPTISCALER_NR_SELF_TEST
+    if (!NrAddonHost::backendPollingSensitivity)
+    {
+        if (vk == VK_CONTROL)
+            return OptiInput::IsKeyDown(VK_CONTROL) || OptiInput::IsKeyDown(VK_LCONTROL) || OptiInput::IsKeyDown(VK_RCONTROL);
+        if (vk == VK_SHIFT)
+            return OptiInput::IsKeyDown(VK_SHIFT) || OptiInput::IsKeyDown(VK_LSHIFT) || OptiInput::IsKeyDown(VK_RSHIFT);
+        if (vk == VK_MENU)
+            return OptiInput::IsKeyDown(VK_MENU) || OptiInput::IsKeyDown(VK_LMENU) || OptiInput::IsKeyDown(VK_RMENU);
+        return OptiInput::IsKeyDown(vk);
+    }
+#endif
     return (::GetKeyState(vk) & 0x8000) != 0;
 }
 
@@ -308,6 +335,12 @@ static void ImGui_ImplWin32_AddKeyEvent(ImGuiIO& io, ImGuiKey key, bool down, in
 
 static void ImGui_ImplWin32_ProcessKeyEventsWorkarounds(ImGuiIO& io)
 {
+#ifdef OPTISCALER_NR_SELF_TEST
+    // Owned messages and focus/reset clear held keys; desktop reconciliation
+    // would replace that state with unrelated keyboard input.
+    if (!NrAddonHost::backendPollingSensitivity)
+        return;
+#endif
     // Left & right Shift keys: when both are pressed together, Windows tend to not generate the WM_KEYUP event for the first released one.
     if (ImGui::IsKeyDown(ImGuiKey_LeftShift) && !IsVkDown(VK_LSHIFT))
         ImGui_ImplWin32_AddKeyEvent(io, ImGuiKey_LeftShift, false, VK_LSHIFT);
@@ -344,6 +377,12 @@ static ImGuiViewport* ImGui_ImplWin32_FindViewportByPlatformHandle(ImGuiPlatform
 // Because of that, it is a little more complicated than your typical single-viewport binding code!
 static void ImGui_ImplWin32_UpdateMouseData(ImGuiIO& io, ImGuiPlatformIO& platform_io)
 {
+#ifdef OPTISCALER_NR_SELF_TEST
+    // WM_MOUSEMOVE supplies the sole owned viewport. Skip the entire desktop
+    // fallback, focus/hit queries and optional cursor warp before any API call.
+    if (!NrAddonHost::backendPollingSensitivity)
+        return;
+#endif
     ImGui_ImplWin32_Data* bd = ImGui_ImplWin32_GetBackendData(io);
     IM_ASSERT(bd->hWnd != 0);
 
@@ -842,6 +881,18 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandlerEx(HWND hwnd, UINT msg, WPA
                 ImGui_ImplWin32_AddKeyEvent(io, key, is_key_down, vk, scancode);
 
             // Submit individual left/right modifier events
+#ifdef OPTISCALER_NR_SELF_TEST
+            // Decode the side from the owned message, not desktop key state.
+            if (vk == VK_SHIFT)
+                ImGui_ImplWin32_AddKeyEvent(io, scancode == 0x36 ? ImGuiKey_RightShift : ImGuiKey_LeftShift,
+                                           is_key_down, scancode == 0x36 ? VK_RSHIFT : VK_LSHIFT, scancode);
+            else if (vk == VK_CONTROL)
+                ImGui_ImplWin32_AddKeyEvent(io, (lParam & (1 << 24)) ? ImGuiKey_RightCtrl : ImGuiKey_LeftCtrl,
+                                           is_key_down, (lParam & (1 << 24)) ? VK_RCONTROL : VK_LCONTROL, scancode);
+            else if (vk == VK_MENU)
+                ImGui_ImplWin32_AddKeyEvent(io, (lParam & (1 << 24)) ? ImGuiKey_RightAlt : ImGuiKey_LeftAlt,
+                                           is_key_down, (lParam & (1 << 24)) ? VK_RMENU : VK_LMENU, scancode);
+#else
             if (vk == VK_SHIFT)
             {
                 // Important: Shift keys tend to get stuck when pressed together, missing key-up events are corrected in ImGui_ImplWin32_ProcessKeyEventsWorkarounds()
@@ -858,6 +909,7 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandlerEx(HWND hwnd, UINT msg, WPA
                 if (IsVkDown(VK_LMENU) == is_key_down) { ImGui_ImplWin32_AddKeyEvent(io, ImGuiKey_LeftAlt, is_key_down, VK_LMENU, scancode); }
                 if (IsVkDown(VK_RMENU) == is_key_down) { ImGui_ImplWin32_AddKeyEvent(io, ImGuiKey_RightAlt, is_key_down, VK_RMENU, scancode); }
             }
+#endif
         }
         return 0;
     }

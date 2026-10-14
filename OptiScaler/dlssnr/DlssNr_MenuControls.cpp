@@ -1,14 +1,25 @@
 #include "pch.h"
 #include "DlssNr_MenuSections.h"
 #include "DlssNr_Placement.h"
+#include "DlssNr_PipelineUi.h"
+#include "DlssNr_Status.h"
 #include <Config.h>
 #include <menu/menu_common.h>
+#include <menu/Localization.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#ifdef OPTISCALER_NR_SELF_TEST
+#include <imgui/imgui_internal.h>
+namespace NrAddonHost
+{
+void RecordNrOption(unsigned control, bool selectable, bool hovered, bool current,
+                    unsigned requested, unsigned effective, bool supported);
+}
+#endif
 
 namespace DlssNr::MenuSections
 {
@@ -55,6 +66,92 @@ void RenderInput(Config* config)
 
     HelpMarker("50% halves width and height. 100% uses the full input size.");
 
+    const auto api = State::Instance().swapchainApi;
+    const auto reported = ReadStatus(api == API::Vulkan ? Backend::Vulkan : Backend::Dx12);
+    const bool currentContext = reported.output.contextState == ModelContextState::Current &&
+                                reported.output.identity.Known();
+    auto context = currentContext ? reported.output.optionContext : OptionContext {};
+    context.nativeDx12 = context.nativeDx12 && api == API::DX12;
+    // Preview eligibility for the committed scale, using actual integer input extents.
+    float optionScale = config->DlssNrWorkingScale.value_or_default();
+    optionScale = std::isfinite(optionScale) ? std::clamp(optionScale, 0.25f, 2.0f) : 1.0f;
+    context.workingWidth = (uint32_t) (context.inputWidth * optionScale + 0.5f);
+    context.workingHeight = (uint32_t) (context.inputHeight * optionScale + 0.5f);
+    const auto options = ResolveOptions(config->DlssNrInputFilter.value_or_default(),
+        config->DlssNrSignalEncoding.value_or_default(), context,
+        reported.output.inputFilter, reported.output.signalEncoding,
+        reported.output.inputFilterOverrideSupported, reported.output.signalEncodingOverrideSupported);
+    // Selection previews the committed scale. Effective processing still comes
+    // from the published model input, not from that preview or the selected request.
+    auto processingContext = currentContext ? reported.output.optionContext : OptionContext {};
+    processingContext.nativeDx12 = processingContext.nativeDx12 && api == API::DX12;
+    const auto processing = ResolveOptions(options.requestedFilter, options.requestedSignal, processingContext,
+        reported.output.inputFilter, reported.output.signalEncoding,
+        reported.output.inputFilterOverrideSupported, reported.output.signalEncodingOverrideSupported);
+    const auto explain = [&](bool selectable, const char* help, unsigned requested, unsigned effective,
+                             bool supported, unsigned control)
+    {
+        const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+#ifdef OPTISCALER_NR_SELF_TEST
+        const auto& g = *ImGui::GetCurrentContext();
+        const auto minimum = ImGui::GetItemRectMin(), maximum = ImGui::GetItemRectMax();
+        std::printf("TASK8_OPTION_ITEM frame=%d control=%u id=%08X window=%08X "
+                    "item=%.2f,%.2f,%.2f,%.2f selectable=%u hovered=%u current=%u "
+                    "requested=%u effective=%u supported=%u api=%u hdr=%u input=%u,%u work=%u,%u\n",
+                    g.FrameCount, control, g.LastItemData.ID, ImGui::GetCurrentWindow()->ID,
+                    minimum.x, minimum.y, maximum.x, maximum.y, unsigned(selectable), unsigned(hovered),
+                    unsigned(currentContext), requested, effective, unsigned(supported), unsigned(api),
+                    unsigned(context.hdrProxy), context.inputWidth, context.inputHeight,
+                    context.workingWidth, context.workingHeight);
+        std::fflush(stdout);
+        NrAddonHost::RecordNrOption(control, selectable, hovered, currentContext, requested, effective, supported);
+#endif
+        HelpMarker(help);
+        if (!selectable && hovered)
+        {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            if (!currentContext)
+                ImGui::TextWrapped("Current model/input context: %s.",
+                    reported.output.contextState == ModelContextState::Unknown ? "unknown" : "unavailable");
+            ImGui::TextWrapped("%s", help);
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
+        if (!selectable)
+        {
+            if (!currentContext)
+                ImGui::TextWrapped("Current model/input context: %s.",
+                    reported.output.contextState == ModelContextState::Unknown ? "unknown" : "unavailable");
+            ImGui::TextWrapped("%s", help);
+        }
+        ImGui::TextWrapped(control == 0 ? "Input filter: requested %s; effective %s; overrides %s."
+                                       : "Signal encoding: requested %s; effective %s; overrides %s.",
+            control == 0 ? InputFilterNames[requested] : SignalEncodingNames[requested],
+            control == 0 ? InputFilterNames[effective] : SignalEncodingNames[effective],
+            supported ? "supported" : "unsupported");
+    };
+    constexpr const char* filterHelp =
+        "DX12 subnative input only. Native/supernative and unsupported contexts retain their existing path. "
+        "Selection preserves intent; runtime support is reported separately.";
+    constexpr const char* signalHelp =
+        "Experimental DX12 HDR-proxy request. SDR and unsupported contexts retain Legacy. "
+        "Selection alone does not activate paired signal transport.";
+    int filter = static_cast<int>(options.requestedFilter);
+    ImGui::BeginDisabled(!options.filterSelectable);
+    if (ImGui::Combo("Input filter", &filter, InputFilterNames, IM_ARRAYSIZE(InputFilterNames)))
+        config->DlssNrInputFilter = static_cast<InputFilter>(filter);
+    ImGui::EndDisabled();
+    explain(options.filterSelectable, filterHelp, unsigned(processing.requestedFilter),
+            unsigned(processing.effectiveFilter), processing.filterSupported, 0);
+    int signal = static_cast<int>(options.requestedSignal);
+    ImGui::BeginDisabled(!options.signalSelectable);
+    if (ImGui::Combo("Signal encoding", &signal, SignalEncodingNames, IM_ARRAYSIZE(SignalEncodingNames)))
+        config->DlssNrSignalEncoding = static_cast<SignalEncoding>(signal);
+    ImGui::EndDisabled();
+    explain(options.signalSelectable, signalHelp, unsigned(processing.requestedSignal),
+            unsigned(processing.effectiveSignal), processing.signalSupported, 1);
+
     if (scalePercent > 100)
     {
         static const char* dsNames[] = { "FSR1",     "Bicubic", "Catmull-Rom", "Lanczos2",
@@ -69,22 +166,50 @@ void RenderInput(Config* config)
         HelpMarker("Downsampling filter for resolutions above 100%.");
     }
     {
-        const bool reduced = config->DlssNrWorkingScale.value_or_default() < 0.999f;
+        const float workScale = config->DlssNrWorkingScale.value_or_default();
+        const bool reduced = workScale < 0.999f;
+        const auto placement = ResolvePlacement(
+            config->DlssNrRunBeforeSr.value_or_default(), config->DlssNrDeferredDlss.value_or_default(),
+            config->DlssNrResidualAcrossRr.value_or_default(), config->DlssNrFinishedPicture.value_or_default());
 
         ImGui::BeginDisabled(!reduced);
 
-        static const char* enlargeNames[] = { "Classic", "Matched residual", "Matched residual + DLSS",
-                                             "Lighting + colour", "Lighting + colour + DLSS" };
-        int enlarge = (int) std::min(config->DlssNrTransfer.value_or_default(), 4u);
-
-        if (ImGui::Combo("Enlargement", &enlarge, enlargeNames, IM_ARRAYSIZE(enlargeNames)))
-            config->DlssNrTransfer = (uint32_t) enlarge;
+        const uint32_t requested = config->DlssNrTransfer.value_or_default();
+        if (ImGui::BeginCombo("Enlargement", PipelineUi::ReconstructionName(requested)))
+        {
+            for (uint32_t transfer = 0; transfer <= 4; ++transfer)
+            {
+                const bool selectable =
+                    PipelineUi::ReconstructionSelectable(transfer, placement.beforeUpscale, workScale);
+                ImGui::BeginDisabled(!selectable);
+                const bool selected = requested == transfer;
+                if (ImGui::Selectable(PipelineUi::ReconstructionName(transfer), selected))
+                    config->DlssNrTransfer = transfer;
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+                if (!selectable && reduced && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+                    ImGui::TextUnformatted("Private DLSS enlargement needs a post-upscale model route. "
+                                           "An existing request keeps its saved value and uses the spatial equivalent.");
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+                ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
+        }
 
         ImGui::EndDisabled();
 
         HelpMarker("Below 100%: Lighting + colour resizes lighting gain and colour changes separately, then applies "
                    "them at full resolution. This can reduce resize halos; fully black pixels remain black. "
                    "DLSS modes require post-upscale DX12 processing.");
+        if (placement.beforeUpscale && reduced)
+            ImGui::TextWrapped("Private DLSS enlargement is unavailable for configured before-upscale model "
+                               "generation. Existing requests use their spatial equivalent without a failure "
+                               "or a saved-setting change.");
     }
     static const char* reversibleNames[] = { "Off (soft knee)", "Neutwo proxy + composed", "Neutwo proxy + replace",
                                              "Hybrid proxy + composed", "Hybrid proxy + replace" };
@@ -205,8 +330,11 @@ void RenderModel(Config* config)
     const bool inherited = selectedPass != 0;
     const auto tuning = [&](auto& intensity, auto& structure, auto& tone, auto& skin, auto& autoMask)
     {
-        DeferredSlider("Intensity", &intensity, 0.0f, 2.0f,
-                       inherited ? config->DlssNrIntensity.value_or_default() : 1.0f, inherited);
+        {
+            const Localization::DisplayAlias display("Intensity", "NR intensity");
+            DeferredSlider("Intensity", &intensity, 0.0f, 2.0f,
+                           inherited ? config->DlssNrIntensity.value_or_default() : 1.0f, inherited);
+        }
         DeferredSlider("Local structure", &structure, 0.0f, 2.0f,
                        inherited ? config->DlssNrLocalStructure.value_or_default() : 1.0f, inherited);
         DeferredSlider("Local tone", &tone, 0.0f, 2.0f, inherited ? 0.0f : 1.0f, inherited);
@@ -227,6 +355,7 @@ void RenderModel(Config* config)
     static const char* inheritedStyles[] = { "Auto", "Standard", "Natural", "Cinematic" };
     if (selectedPass == 0)
     {
+        const Localization::DisplayAlias display("Style", "NR style");
         int style = (int) std::min(config->DlssNrStyle.value_or_default(), 2u);
         if (ImGui::Combo("Style", &style, styles, IM_ARRAYSIZE(styles)))
             config->DlssNrStyle = (uint32_t) style;
@@ -235,6 +364,7 @@ void RenderModel(Config* config)
     }
     else
     {
+        const Localization::DisplayAlias display("Style", "NR style");
         auto& pass = config->DlssNrPassOverrides[selectedPass - 1];
         int style = pass.style.has_value() ? std::clamp((int) pass.style.value(), 0, 2) + 1 : 0;
         if (ImGui::Combo("Style", &style, inheritedStyles, IM_ARRAYSIZE(inheritedStyles)))
@@ -299,8 +429,11 @@ void RenderInspect(Config* config)
 
     static const char* compareNames[] = { "Off", "Side by side", "Wipe" };
     int compare = (int) config->DlssNrCompare.value_or_default();
-    if (ImGui::Combo("Compare", &compare, compareNames, IM_ARRAYSIZE(compareNames)))
-        config->DlssNrCompare = (uint32_t) compare;
+    {
+        const Localization::DisplayAlias display("Compare", "NR comparison");
+        if (ImGui::Combo("Compare", &compare, compareNames, IM_ARRAYSIZE(compareNames)))
+            config->DlssNrCompare = (uint32_t) compare;
+    }
 
     HelpMarker("Compare the original and NR output.");
 

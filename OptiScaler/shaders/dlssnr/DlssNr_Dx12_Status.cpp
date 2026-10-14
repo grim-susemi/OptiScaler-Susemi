@@ -3,7 +3,8 @@
 
 auto DlssNr_Dx12::State::ReportSkipOnce(const char* reason) -> void
 {
-
+    outputStatus.state = nr.failed ? DlssNr::OutputState::Failed : DlssNr::OutputState::Skipped;
+    outputStatus.reason = nr.failed ? DlssNr::OutputReason::Model : DlssNr::OutputReason::Resource;
     if (seen.insert(reason).second)
         LOG_INFO("DLSS-NR did not run: {}", reason);
 }
@@ -48,12 +49,26 @@ auto DlssNr_Dx12::State::ConsumeControls() -> void
 
 auto DlssNr_Dx12::State::Publish() -> void
 {
-    DlssNr::PublishStatus(
-        &shader, DlssNr::Backend::Dx12,
-        { !nr.failed && modelRunning && enlargementStatus.empty(),
+    if (!Config::Instance()->DlssNrEnabled.value_or_default())
+    {
+        outputStatus = {};
+        modelFacts = {};
+    }
+    else if (outputStatus.state == DlssNr::OutputState::Disabled)
+        outputStatus.state = DlssNr::OutputState::WaitingForModel;
+    modelFacts.ValidateCurrent(DlssNr::Backend::Dx12, late.consumer);
+    DlssNr::StatusSnapshot snapshot {
+          !nr.failed && modelRunning && enlargementStatus.empty(),
           nr.failed ? nr.reason : enlargementStatus,
           lastGpuTime,
-          frames });
+          frames,
+          reconstruction,
+          outputStatus,
+          modelFacts };
+    // Existing option consumers receive the same current facts as the status
+    // panel, while the application outcome keeps its real admission/flags.
+    static_cast<DlssNr::ModelFacts&>(snapshot.output) = modelFacts;
+    DlssNr::PublishStatus(&shader, DlssNr::Backend::Dx12, snapshot);
 }
 
 void DlssNr_Dx12::State::EndGpuTiming(ID3D12GraphicsCommandList* cmdList)

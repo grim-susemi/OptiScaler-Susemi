@@ -2,6 +2,11 @@
 #include <dlssnr/DlssNr_MenuOverlay.h>
 #include "menu_common.h"
 #include "Localization.h"
+#ifdef OPTISCALER_NR_SELF_TEST
+#include <cstdio>
+#include "../../tests/nr_addon_host/ForbiddenStartup.h"
+#include <fsr4/FSR4ModelSelection.h>
+#endif
 #if defined(OPTISCALER_RTX40_MFG)
 #include <framegen/dlssg/AmpereMfgLoader.h>
 #include <framegen/dlssg/MfgUnlock.h>
@@ -83,7 +88,6 @@ static std::string selectedUpscalerName = "";
 static Upscaler currentBackend = Upscaler::Reset;
 static std::string currentBackendName = "";
 static int refreshRate = 0;
-static ImVec2 lastPosition(-1000.0f, -1000.0f);
 
 static ImVec2 splashPosition(-1000.0f, -1000.0f);
 static ImVec2 splashSize(0.0f, 0.0f);
@@ -7591,9 +7595,24 @@ void MenuCommon::RenderKeybindSettings(RenderMenuContext& ctx)
     }
 }
 
+#ifdef OPTISCALER_NR_SELF_TEST
+namespace NrAddonHost { void RecordMenuColumnMeasurement(); }
+#endif
+
 void MenuCommon::RenderMainMenuTable(RenderMenuContext& ctx)
 {
-    if (ImGui::BeginTable("main", 2, ImGuiTableFlags_SizingStretchSame))
+    const auto& style = ImGui::GetStyle();
+    const float routeWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + style.FrameBorderSize +
+                             ImGui::CalcTextSize("Generate before upscale, apply after upscale").x;
+    const float privateWidth = ImGui::GetFrameHeight() * 5 + style.ItemInnerSpacing.x + style.FrameBorderSize +
+                               ImGui::CalcTextSize("Private NR upscaler").x +
+                               ImGui::CalcTextSize("(?)").x + style.ItemSpacing.x * 2;
+    const float minimumColumn = std::max(routeWidth, privateWidth) + style.IndentSpacing + style.CellPadding.x * 2;
+    const int columns = ImGui::GetContentRegionAvail().x >= minimumColumn * 2 ? 2 : 1;
+#ifdef OPTISCALER_NR_SELF_TEST
+    NrAddonHost::RecordMenuColumnMeasurement();
+#endif
+    if (ImGui::BeginTable("main", columns, ImGuiTableFlags_SizingStretchSame))
     {
         ImGui::TableNextColumn();
 
@@ -7813,6 +7832,9 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
 
     // One-shot: a Korean request with no Hangul source falls back to English and
     // says so once, in the footer.
+#ifdef OPTISCALER_NR_SELF_TEST
+    const auto languageMin = ImGui::GetItemRectMin(), languageMax = ImGui::GetItemRectMax();
+#endif
     ImGui::SameLine(0.0f, 10.0f);
     Localization::DrawMissingFontNotice();
 
@@ -7820,6 +7842,9 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
 
     if (ImGui::Button("Save Settings"))
         config->SaveIni();
+#ifdef OPTISCALER_NR_SELF_TEST
+    const auto saveMin = ImGui::GetItemRectMin(), saveMax = ImGui::GetItemRectMax();
+#endif
 
     ImGui::SameLine(0.0f, 6.0f);
 
@@ -7836,9 +7861,9 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
         io.WantCaptureKeyboard = false;
         io.WantCaptureMouse = false;
     }
-
-    auto winSize = ImGui::GetWindowSize();
-    auto winPos = ImGui::GetWindowPos();
+#ifdef OPTISCALER_NR_SELF_TEST
+    const auto closeMin = ImGui::GetItemRectMin(), closeMax = ImGui::GetItemRectMax();
+#endif
 
     ImGui::SameLine();
 
@@ -7848,7 +7873,7 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
     textSize.x += style.ItemSpacing.x;
 
     float avail = ImGui::GetContentRegionAvail().x;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - textSize.x);
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, avail - textSize.x));
 
     // Make button text underline
     if (ImGui::Button("Open Wiki"))
@@ -7857,6 +7882,14 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
         auto ctx = ImGui::GetCurrentContext();
         pIO->Platform_OpenInShellFn(ctx, "https://github.com/optiscaler/OptiScaler/wiki");
     }
+#ifdef OPTISCALER_NR_SELF_TEST
+    const auto wikiMin = ImGui::GetItemRectMin(), wikiMax = ImGui::GetItemRectMax();
+    std::printf("HOST_MENU_FOOTER_RECTS frame=%d language=%.1f,%.1f,%.1f,%.1f "
+                "save=%.1f,%.1f,%.1f,%.1f close=%.1f,%.1f,%.1f,%.1f wiki=%.1f,%.1f,%.1f,%.1f\n",
+                ImGui::GetFrameCount(), languageMin.x, languageMin.y, languageMax.x, languageMax.y,
+                saveMin.x, saveMin.y, saveMax.x, saveMax.y, closeMin.x, closeMin.y, closeMax.x, closeMax.y,
+                wikiMin.x, wikiMin.y, wikiMax.x, wikiMax.y);
+#endif
     ShowHelpMarker("Click to open the OptiScaler Wiki page\nin your default browser\n\n"
                    "Compatibility list with known game issues\nand workarounds, FG options explained\n"
                    "and other useful info");
@@ -7872,26 +7905,6 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
         ImGui::Spacing();
     }
 
-    if (lastPosition.x < -900.0f || (lastPosition.x >= winPos.x - 1.0f && lastPosition.y >= winPos.y - 1.0f &&
-                                     lastPosition.x <= winPos.x + 1.0f && lastPosition.y <= winPos.y + 1.0f))
-    {
-        float posX;
-        float posY;
-
-        posX = ((float) io.DisplaySize.x - winSize.x) / 2.0f;
-        posY = ((float) io.DisplaySize.y - winSize.y) / 2.0f;
-
-        // don't position menu outside of screen
-        if (posX < 0.0 || posY < 0.0)
-        {
-            posX = 50;
-            posY = 50;
-        }
-
-        ImGui::SetWindowPos(ImVec2 { posX, posY });
-        lastPosition.x = posX;
-        lastPosition.y = posY;
-    }
 }
 
 void MenuCommon::RenderMipmapBiasWindow(RenderMenuContext& ctx, ImGuiWindowFlags flags)
@@ -8147,7 +8160,7 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     auto& frameTimesCalculated = ctx.frameTimesCalculated;
     auto& menuResScale = ctx.menuResScale;
 
-    if (!_isVisible)
+    if (!_isVisible || ctx.io.DisplaySize.x <= 0.0f || ctx.io.DisplaySize.y <= 0.0f)
         return;
 
     // Check for GPU support once and reuse the result in all menu sections.
@@ -8182,7 +8195,6 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     ImGuiWindowFlags flags = 0;
     flags |= ImGuiWindowFlags_NoSavedSettings;
     flags |= ImGuiWindowFlags_NoCollapse;
-    flags |= ImGuiWindowFlags_AlwaysAutoResize;
 
     if (lastMenuScale != menuResScale)
     {
@@ -8200,7 +8212,6 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
         style.MouseCursorScale = 1.0f;
         CopyMemory(style.Colors, styleold.Colors, sizeof(style.Colors)); // Restore colors
 
-        ImGui::SetNextWindowSize({ 1.0f, 1.0f });
     }
 
     // Main menu window
@@ -8211,7 +8222,29 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
                              (state.detectedQuirks.size() > 0) ? "(Q)" : "", state.isOptiPatcherSucceed ? "(OP)" : "");
     }
 
-    if (ImGui::Begin(windowTitle.c_str(), NULL, flags))
+    const auto display = ctx.io.DisplaySize;
+    // Logical menu dimensions use the existing Menu Scale. On small displays
+    // even the preferred minimum must fit; later frames retain the user's size.
+    const ImVec2 minimum { std::min(320.0f * menuResScale, display.x),
+                           std::min(240.0f * menuResScale, display.y) };
+    const ImVec2 initial { std::min(960.0f * menuResScale, display.x),
+                           std::min(720.0f * menuResScale, display.y) };
+    ImGui::SetNextWindowSize(initial, ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2 { (display.x - initial.x) * 0.5f, (display.y - initial.y) * 0.5f },
+                            ImGuiCond_FirstUseEver);
+    if (const auto* previous = ImGui::FindWindowByName(windowTitle.c_str()))
+    {
+        const ImVec2 size { std::clamp(previous->SizeFull.x, minimum.x, display.x),
+                            std::clamp(previous->SizeFull.y, minimum.y, display.y) };
+        if (size.x != previous->SizeFull.x || size.y != previous->SizeFull.y)
+            ImGui::SetNextWindowSize(size);
+        // Position is intentionally not clamped to the display: ImGui keeps
+        // DisplayWindowPadding of the window visible, so the menu can be dragged
+        // past the game edges without being lost.
+    }
+    ImGui::SetNextWindowSizeConstraints(minimum, display);
+
+    if (ImGui::Begin(windowTitle.c_str(), NULL, flags | ImGuiWindowFlags_HorizontalScrollbar))
     {
         // Header/status messages shown above the two-column settings table.
         RenderMainMenuHeaderMessages(ctx);
@@ -8227,8 +8260,8 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     }
 
     // Detached utility windows owned by the main menu.
-    RenderMipmapBiasWindow(ctx, flags);
-    RenderHudlessResourcesWindow(ctx, flags);
+    RenderMipmapBiasWindow(ctx, flags | ImGuiWindowFlags_AlwaysAutoResize);
+    RenderHudlessResourcesWindow(ctx, flags | ImGuiWindowFlags_AlwaysAutoResize);
 
     if (config->UseHQFont.value_or_default())
         ImGui::PopFontSize();
@@ -8281,6 +8314,13 @@ bool MenuCommon::RenderMenu()
 
 void MenuCommon::Init(HWND InHwnd, bool isUWP)
 {
+#ifdef OPTISCALER_NR_SELF_TEST
+    DWORD ownerPid = 0;
+    const auto ownerTid = GetWindowThreadProcessId(InHwnd, &ownerPid);
+    if (_isInited || ImGui::GetCurrentContext() || !IsWindow(InHwnd) ||
+        ownerPid != GetCurrentProcessId() || ownerTid != GetCurrentThreadId() || isUWP)
+        throw std::runtime_error("HOST_MENU_OWNER_REFUSED");
+#endif
     // Reset shutdown flag in case of re-init
     State::Instance().isShuttingDown = false;
 
@@ -8296,7 +8336,7 @@ void MenuCommon::Init(HWND InHwnd, bool isUWP)
     _handle = InHwnd;
     _isVisible = false;
     _isUWP = isUWP;
-    lastPosition = { -1000.0f, -1000.0f };
+    lastMenuScale = 0.0f;
 
     LOG_DEBUG("Handle: {0:X}", (size_t) _handle);
 
@@ -8390,6 +8430,11 @@ void MenuCommon::Init(HWND InHwnd, bool isUWP)
 
     ApplyThemeStyle();
     _isInited = true;
+#ifdef OPTISCALER_NR_SELF_TEST
+    std::printf("HOST_PRODUCTION_MENU_INIT context=%p hwnd=%p platform=%u hangul=%u source=%s fonts=%d sources=%d\n",
+                ImGui::GetCurrentContext(), _handle, unsigned(initResult), unsigned(hangul.available),
+                hangul.source.c_str(), hangul.fontsAfter, hangul.sourcesAfter);
+#endif
 }
 
 void MenuCommon::Shutdown()
@@ -8397,6 +8442,11 @@ void MenuCommon::Shutdown()
     if (!MenuCommon::_isInited)
         return;
 
+#ifdef OPTISCALER_NR_SELF_TEST
+    OptiInput::Shutdown();
+    inputMenu = inputFG = inputFps = inputFpsCycle = inputDlssNr = capturingKey = false;
+    lastInputTick = 0;
+#endif
     // if (_oWndProc != nullptr)
     //{
     //     auto handle = (HWND) ImGui::GetMainViewport()->PlatformHandleRaw;

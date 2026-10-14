@@ -112,6 +112,22 @@ const char* Lookup(std::string_view display);
 /// Translated copy of a display range. A miss returns the input content unchanged.
 std::string Translate(std::string_view display);
 
+/// One widget may have a display key distinct from its protected English
+/// label/INI token. Only presentation lookups inside this scope use that key;
+/// the widget still receives its original label for IDs and option dispatch.
+class DisplayAlias
+{
+  public:
+    DisplayAlias(const char* label, const char* catalogKey);
+    ~DisplayAlias();
+    DisplayAlias(const DisplayAlias&) = delete;
+    DisplayAlias& operator=(const DisplayAlias&) = delete;
+
+  private:
+    const char* previousLabel;
+    const char* previousKey;
+};
+
 /// Presentation-only substitution. The guard repoints the caller's range at the
 /// translated bytes and leaves it completely alone when there is nothing to
 /// substitute, so an untranslated string keeps the exact input pointer.

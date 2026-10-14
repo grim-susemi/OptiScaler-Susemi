@@ -1,7 +1,8 @@
-﻿#pragma once
+#pragma once
 
 #include "SysUtils.h"
 #include "State.h"
+#include "dlssnr/DlssNr_Options.h"
 
 #include <optional>
 #include <filesystem>
@@ -258,6 +259,8 @@ class Config
     CustomOptional<bool> DlssNrEnabled { false };
     CustomOptional<bool> DlssNrRunBeforeSr { false };
     CustomOptional<bool> DlssNrFinishedPicture { false };
+    // Internal compatibility adoption; only explicit direct selection enables it.
+    CustomOptional<bool> DlssNrAutomaticUICorrection { false };
     // Fit the scene-to-finished HDR response for early residuals.
     CustomOptional<bool> DlssNrHdrTransfer { false };
     // Generate before SR, privately upscale the edit, then compose after SR.
@@ -331,6 +334,8 @@ class Config
 
     // Model width/height scale; composition remains at the input size.
     CustomOptional<float> DlssNrWorkingScale { 1.0f };
+    CustomOptional<DlssNr::InputFilter, SoftDefault> DlssNrInputFilter { DlssNr::InputFilter::Area };
+    CustomOptional<DlssNr::SignalEncoding, SoftDefault> DlssNrSignalEncoding { DlssNr::SignalEncoding::Legacy };
 
     // Independent downsampling filter for NR model scales above 100%.
     CustomOptional<Scaler> DlssNrScalingDownscaler { Scaler::Lanczos3 };

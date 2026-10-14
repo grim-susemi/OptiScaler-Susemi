@@ -93,6 +93,15 @@ class IdentifyGpu
     // Sorted by priority, the first one should be treated as the primary one
     static std::vector<GpuInformation> getAllGpus();
     static GpuInformation getPrimaryGpu();
+    // Diagnostic value seam: never triggers enumeration or a physical adapter/driver query.
+    static std::optional<GpuInformation> findCachedGpu(LUID luid)
+    {
+        std::scoped_lock lock(mutex);
+        for (const auto& gpu : cache)
+            if (IsEqualLUID(gpu.luid, luid))
+                return gpu;
+        return std::nullopt;
+    }
     static void updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3D12CreateDevice = nullptr);
     static void updateInt8Support(std::optional<bool>& sdkSupportsInt8, std::optional<bool>& amdxcffx64SupportsInt8);
 };

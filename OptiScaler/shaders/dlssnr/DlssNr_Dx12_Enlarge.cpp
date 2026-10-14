@@ -104,6 +104,7 @@ ID3D12Resource* DlssNr_Dx12::State::EnlargeMatchedResidual(ID3D12GraphicsCommand
     DlssNrConstants encode {};
     encode.Mode = structural ? DlssNrMode_EncodeResizeField : DlssNrMode_EncodeProxyResidual;
     encode.Width = w; encode.Height = h; encode.Passthrough = resolve.Passthrough;
+    encode.SignalEncoding = resolve.SignalEncoding;
     bool ok = shader.DispatchPass(cmd, encode, proxy, answer, nullptr, nullptr, nullptr, g.input.Get(), nullptr);
     DlssNrConstants guides {}; guides.Mode = DlssNrMode_ResizePrivateGuides;
     guides.Width = w; guides.Height = h;

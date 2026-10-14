@@ -5,6 +5,7 @@
 
 #include "MfgUnlockMethod.h"
 #include "MfgUnlockProvider.h"
+#include "MfgUnlockStatus.h"
 
 #include <SysUtils.h>
 
@@ -47,27 +48,6 @@ namespace MfgUnlock
 // shape of the code they patch -- so a module this does not recognise is the expected outcome on a
 // version nobody has looked at yet, not a fault. The menu reports this so a report comes back with a
 // version number attached rather than "it does not work".
-struct Status
-{
-    bool ModuleFound = false; // nvngx_dlssg.dll was loaded
-    bool AdvertiseMatched = false;
-    bool ValidateMatched = false;
-    unsigned int KernelsRewritten = 0; // kernel groups relabelled, or descriptors redirected to the PTX rebuild
-    TemporalMethod TemporalAttempted = TemporalMethod::None; // what the configuration asked for at load
-    std::string TemporalDetail;                              // why the attempt did not land, or what it did
-    std::string SnippetVersion; // file version of nvngx_dlssg.dll, empty if it could not be read
-
-    // The Streamline DLSS-G plugin's own frame-count clamp. A string literal, empty until a plugin has
-    // been seen, so the overlay can read it while a hook thread writes it.
-    const char* PluginCeiling = "";
-
-    // Software frame pacing (the flip-metering patch). A string literal like PluginCeiling: empty until a
-    // plugin has been seen, "patched", or the reason it was not.
-    const char* FlipMetering = "";
-    unsigned int FlipSites = 0;
-    bool FlipRequested = false; // [DLSSG] AdaFlipMeteringPatch at load, for the restart line
-};
-
 Status LastStatus();
 bool EnabledForSession();
 
@@ -86,18 +66,6 @@ unsigned int UnlockedMax();
 // What the game's own DLSS-G is doing, for the overlay. Written on the game's threads and read by the
 // overlay, so plain atomics. A checkbox proves nothing about MFG: these are the counts Streamline itself
 // reported. Not filled while OptiScaler's own frame generation stands in for DLSS-G.
-struct Telemetry
-{
-    std::atomic_bool optionsSeen { false };
-    std::atomic_bool active { false };         // the last slDLSSGSetOptions sent left DLSS-G on
-    std::atomic<unsigned int> requested { 1 }; // generated frames the game asked for (1 = 2X)
-    std::atomic<unsigned int> sent { 1 };      // generated frames sent on, after any override
-    std::atomic<unsigned int> result { 0 };    // sl::Result of that call (0 = ok)
-    std::atomic_bool stateSeen { false };
-    std::atomic<unsigned int> presented { 0 }; // numFramesActuallyPresented at the last slDLSSGGetState
-    std::atomic<unsigned int> maxPresented { 0 };
-};
-
 const Telemetry& GetTelemetry();
 void RecordSetOptions(unsigned int requested, unsigned int sent, bool active, unsigned int result);
 void RecordState(unsigned int presented);

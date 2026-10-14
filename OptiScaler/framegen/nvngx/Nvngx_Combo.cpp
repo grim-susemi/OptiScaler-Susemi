@@ -8,6 +8,7 @@
 #include <proxies/FfxApi_Proxy.h>
 #include <numbers>
 #include <misc/IdentifyGpu.h>
+#include <dlssnr/DlssNr_MfgObserverNgx.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -209,12 +210,15 @@ NVSDK_NGX_Result Nvngx_Combo::D3D12_EvaluateFeature(ID3D12GraphicsCommandList* I
 
     // Assuming ffx can only do one fake frame
     uint32_t frameIndex = 1;
-    InParameters->Get("DLSSG.MultiFrameIndex", &frameIndex);
+    const auto indexReadResult = InParameters->Get("DLSSG.MultiFrameIndex", &frameIndex);
 
     uint32_t frameCount = 0;
     InParameters->Get("DLSSG.MultiFrameCount", &frameCount);
 
     NVSDK_NGX_Result result {};
+    const auto observation = DlssNr::MfgObserver::Ngx(
+        DlssNr::MfgObserver::Seam::NgxCombo, DlssNr::MfgObserver::Value(this), InFeatureHandle,
+        InParameters, InCmdList, NVSDK_NGX_Feature_FrameGeneration, true, true, frameIndex, indexReadResult);
 
     if ((frameCount == 1 && frameIndex == 1) || (frameCount == 3 && frameIndex == 2) ||
         (frameCount == 5 && frameIndex == 3))
@@ -249,6 +253,7 @@ NVSDK_NGX_Result Nvngx_Combo::D3D12_EvaluateFeature(ID3D12GraphicsCommandList* I
             CopyTexture(InCmdList, &outputRealFfx, &backbufferFfx);
     }
 
+    DlssNr::MfgObserver::Complete(observation, result);
     return result;
 }
 

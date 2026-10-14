@@ -77,6 +77,7 @@ struct DlssNr_Dx12::State
     std::vector<std::unique_ptr<Enlarger>> retiredEnlargers;
     bool collectingEnlargers = false;
     std::string enlargementStatus;
+    DlssNrReconstruction reconstruction;
     void ReleaseEnlarger();
     void CollectEnlargers();
     ID3D12Resource* EnlargeMatchedResidual(ID3D12GraphicsCommandList* cmd, ID3D12Device* device,
@@ -93,7 +94,8 @@ struct DlssNr_Dx12::State
 
     // Writes matched before/after frames on request, so comparisons stop depending on video.
     capture::FrameCapture captureFrames;
-    DlssNr::PipelineCaptureFrame* pipelineCapture = nullptr; // Owned by lifetime retirement after End.
+    std::shared_ptr<DlssNr::PipelineCaptureSession> pipelineSession;
+    std::shared_ptr<DlssNr::PipelineCaptureFrame> pipelineCapture;
     std::filesystem::path pipelineCaptureDirectory;
     unsigned pipelineCaptureRemaining = 0;
 
@@ -166,7 +168,8 @@ struct DlssNr_Dx12::State
 
     ID3D12Resource* GetResource(NVSDK_NGX_Parameter* params, const char* a, const char* b);
 
-    bool TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses);
+    bool TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses, unsigned int uiCorrection,
+                              unsigned int effectiveInputFilter, unsigned int effectiveSignalEncoding);
 
     // Serialize rendering, presentation and submission callbacks; destruction can re-enter hooks.
     std::recursive_mutex mutex;
@@ -323,6 +326,10 @@ struct DlssNr_Dx12::State
             ComPtr<ID3D12GraphicsCommandList> commands;
             ID3D12CommandList* producer = nullptr; // identity only; never dereferenced
             DlssNrFrameInfo frame {};
+            DlssNr::FinishedIdentity identity {};
+            ComPtr<IUnknown> consumerOwner;
+            ComPtr<ID3D12Device> consumerDevice;
+            bool guidesValid = false;
             uint64_t ready = 0, done = 0, serial = 0;
             bool pending = false, submitted = false, residualOnly = false, sceneLinear = true;
             // Recording ownership (DlssNr_LateSlot.h): owned until the producer list is
@@ -350,6 +357,10 @@ struct DlssNr_Dx12::State
         Slot* heldSlot = nullptr;
         uint64_t heldSlotSerial = 0;
         uint64_t serial = 0, successes = 0;
+        DlssNr::FinishedIdentity consumer {}, claimed {};
+        ComPtr<IUnknown> consumerOwner;
+        ComPtr<ID3D12Device> consumerDevice;
+        uint64_t claimedSerial = 0;
         std::string status = "Waiting for a finished picture.";
         bool reset = true;
         std::atomic<bool> tracking { false };
@@ -366,7 +377,7 @@ struct DlssNr_Dx12::State
 
         void Arm(Slot& slot, ID3D12GraphicsCommandList* cmd);
 
-        void Capture(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, bool rr);
+        void Capture(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, bool rr, bool interop);
 
         bool CaptureResidual(ID3D12GraphicsCommandList* cmd, ID3D12Resource* clean, ID3D12Resource* residual,
                              float scale, bool sceneLinear, bool reset);
@@ -394,7 +405,11 @@ struct DlssNr_Dx12::State
     void ApplyToFinishedPictureDx11(IDXGISwapChain* swapchain);
 
     bool ApplyFinishedColor(ID3D12Resource* color, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE colorSpace,
-                            bool gameFrameHandoff = false);
+                            bool gameFrameHandoff = false, const DlssNr::FinishedIdentity& consumer = {},
+                            uint64_t captureSerial = 0);
+    bool AdmitFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue,
+                              const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts,
+                              bool claim, uint64_t captureSerial = 0);
 
     // XeFG owned application-frame handoff (todo 10), under the owner mutex: the pending
     // capture facts for a finished application picture (the same selection predicate as
@@ -402,8 +417,8 @@ struct DlssNr_Dx12::State
     // wiring can skip without composing), and interval closure so a refused or skipped
     // capture never becomes a later frame's NR input. Fences still protect in-flight reuse.
     bool PendingFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE colorSpace,
-                                DlssNr::XeFGCapture& facts);
-    void CloseFinishedCaptures(uint64_t throughSerial);
+                                DlssNr::XeFGCapture& facts, const DlssNr::FinishedIdentity& consumer = {});
+    void CloseFinishedCaptures(uint64_t throughSerial, const DlssNr::FinishedIdentity& consumer = {});
 
     bool PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID3D12Device* device,
                           const DlssNrFrameInfo& frame, const D3D12_RESOURCE_DESC& desc,
@@ -486,6 +501,9 @@ struct DlssNr_Dx12::State
     unsigned lastFinishedMode = 0;
 
     bool modelRunning = false;
+    DlssNr::ModelFacts modelFacts;
+    DlssNr::OutputStatus outputStatus;
+    ID3D12CommandList* outputCommands = nullptr; // recording identity only, never dereferenced
     ID3D12Resource* buffer = nullptr;
     D3D12_RESOURCE_STATES bufferState = D3D12_RESOURCE_STATE_COMMON;
     uint32_t featureFlags = 0;

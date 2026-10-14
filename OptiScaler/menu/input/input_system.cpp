@@ -1,4 +1,119 @@
 #include "pch.h"
+#ifdef OPTISCALER_NR_SELF_TEST
+#include "input_system.h"
+#include <imgui/imgui.h>
+#include <array>
+#include <stdexcept>
+
+namespace OptiInput
+{
+namespace
+{
+DebugState owned;
+std::array<bool, 256> down {}, pressed {}, released {};
+int lastPressed = 0;
+POINT mouse {};
+bool hasMouse = false;
+}
+
+bool Initialize(const InitializeOptions& options)
+{
+    DWORD pid = 0;
+    const auto tid = GetWindowThreadProcessId(options.TargetHwnd, &pid);
+    if (!IsWindow(options.TargetHwnd) || pid != GetCurrentProcessId() || tid != GetCurrentThreadId() ||
+        options.IsUwp || (options.InputHwnd && options.InputHwnd != options.TargetHwnd) || owned.Initialized)
+        throw std::runtime_error("HOST_INPUT_OWNER_REFUSED");
+    owned.TargetHwnd = owned.InputHwnd = options.TargetHwnd;
+    owned.TargetProcessId = owned.InputProcessId = owned.CurrentProcessId = pid;
+    owned.TargetThreadId = owned.InputThreadId = tid;
+    owned.Initialized = owned.Focused = true;
+    owned.UseWndProcSubclass = false;
+    std::printf("HOST_INPUT_INITIALIZED hwnd=%p hooks=0 subclass=0 polling=0 optionalIntegrations=0\n",
+                options.TargetHwnd);
+    return true;
+}
+bool Initialize(HWND hwnd, bool uwp)
+{
+    InitializeOptions options {};
+    options.TargetHwnd = hwnd;
+    options.IsUwp = uwp;
+    return Initialize(options);
+}
+void OwnedMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    if (!owned.Initialized || hwnd != owned.InputHwnd)
+        throw std::runtime_error("HOST_INPUT_MESSAGE_OWNER_REFUSED");
+    owned.ReceivedWindowMessageThisFrame = true;
+    owned.AcquisitionMode = InputAcquisitionMode::WindowMessages;
+    if ((message == WM_KEYDOWN || message == WM_SYSKEYDOWN) && wparam < down.size())
+    {
+        pressed[wparam] = !down[wparam];
+        down[wparam] = true;
+        lastPressed = static_cast<int>(wparam);
+    }
+    if ((message == WM_KEYUP || message == WM_SYSKEYUP) && wparam < down.size())
+    {
+        released[wparam] = down[wparam];
+        down[wparam] = false;
+    }
+    if (message == WM_MOUSEMOVE)
+    {
+        mouse = { static_cast<short>(LOWORD(lparam)), static_cast<short>(HIWORD(lparam)) };
+        hasMouse = true;
+    }
+    if (message == WM_KILLFOCUS)
+    {
+        down.fill(false);
+        pressed.fill(false);
+        released.fill(false);
+        owned.Focused = false;
+    }
+    if (message == WM_SETFOCUS)
+        owned.Focused = true;
+}
+void BeginFrame(HWND hwnd, bool)
+{
+    if (!owned.Initialized || hwnd != owned.TargetHwnd)
+        throw std::runtime_error("HOST_INPUT_FRAME_OWNER_REFUSED");
+}
+bool IsKeyDown(int vk) { return vk >= 0 && vk < 256 && down[vk]; }
+bool IsKeyPressed(int vk) { return vk >= 0 && vk < 256 && pressed[vk]; }
+bool IsKeyReleased(int vk) { return vk >= 0 && vk < 256 && released[vk]; }
+int GetLastPressedKey() { return lastPressed; }
+void FeedImGui(bool visible)
+{
+    auto& io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Ctrl, down[VK_CONTROL] || down[VK_LCONTROL] || down[VK_RCONTROL]);
+    io.AddKeyEvent(ImGuiMod_Shift, down[VK_SHIFT] || down[VK_LSHIFT] || down[VK_RSHIFT]);
+    io.AddKeyEvent(ImGuiMod_Alt, down[VK_MENU] || down[VK_LMENU] || down[VK_RMENU]);
+    io.AddKeyEvent(ImGuiMod_Super, down[VK_LWIN] || down[VK_RWIN]);
+    if (visible && hasMouse)
+        io.AddMousePosEvent(static_cast<float>(mouse.x), static_cast<float>(mouse.y));
+}
+void ResetMenuInputTransientState()
+{
+    pressed.fill(false);
+    released.fill(false);
+}
+void EndFrame(bool visible)
+{
+    owned.MenuVisible = visible;
+    ResetMenuInputTransientState();
+    owned.ReceivedWindowMessageThisFrame = false;
+}
+DebugState GetDebugState() { return owned; }
+void Shutdown()
+{
+    down.fill(false);
+    ResetMenuInputTransientState();
+    lastPressed = 0;
+    mouse = {};
+    hasMouse = false;
+    owned = {};
+    std::puts("HOST_INPUT_SHUTDOWN initialized=0 hooks=0 keys=0 target=0");
+}
+} // namespace OptiInput
+#else
 #include "input_system_internal.h"
 
 #include <include/imgui/imgui.h>
@@ -1683,3 +1798,4 @@ void ResetMenuInputTransientState()
 }
 
 } // namespace OptiInput
+#endif

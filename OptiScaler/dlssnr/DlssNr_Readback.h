@@ -5,6 +5,7 @@
 #include <fstream>
 #include <cstdint>
 #include <utility>
+#include <algorithm>
 
 namespace DlssNr
 {
@@ -44,12 +45,35 @@ struct ReadbackImage
     Microsoft::WRL::ComPtr<ID3D12Resource> readback;
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout {};
     UINT64 bytes = 0;
+    UINT64 allocationBytes = 0;
+    D3D12_BOX roi {};
+    bool boundedRoi = false;
 
     bool Allocate(ID3D12Device* device, D3D12_RESOURCE_DESC desc, UINT64 budget = UINT64_MAX)
     {
         desc.Format = TypedReadbackFormat(desc.Format);
         device->GetCopyableFootprints(&desc, 0, 1, 0, &layout, nullptr, nullptr, &bytes);
         return bytes && bytes <= budget && CreateReadbackBuffer(device, bytes, &readback);
+    }
+
+    bool AllocateRoi(ID3D12Device* device, D3D12_RESOURCE_DESC desc, UINT64 budget)
+    {
+        if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.SampleDesc.Count != 1 ||
+            desc.MipLevels != 1 || desc.DepthOrArraySize != 1 || !desc.Width || !desc.Height) return false;
+        desc.Width = (std::min)(desc.Width, UINT64(256));
+        desc.Height = (std::min)(desc.Height, UINT(256));
+        roi = { 0, 0, 0, UINT(desc.Width), desc.Height, 1 };
+        desc.Format = TypedReadbackFormat(desc.Format);
+        device->GetCopyableFootprints(&desc, 0, 1, 0, &layout, nullptr, nullptr, &bytes);
+        D3D12_RESOURCE_DESC buffer {};
+        buffer.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        buffer.Width = bytes; buffer.Height = 1;
+        buffer.DepthOrArraySize = buffer.MipLevels = 1; buffer.SampleDesc.Count = 1;
+        buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        allocationBytes = device->GetResourceAllocationInfo(0, 1, &buffer).SizeInBytes;
+        boundedRoi = bytes && allocationBytes != UINT64_MAX && allocationBytes <= budget &&
+            CreateReadbackBuffer(device, bytes, &readback);
+        return boundedRoi;
     }
 
     void Copy(ID3D12GraphicsCommandList* cmd, ID3D12Resource* source, D3D12_RESOURCE_STATES state)
@@ -67,7 +91,7 @@ struct ReadbackImage
         to.pResource = readback.Get();
         to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
         to.PlacedFootprint = layout;
-        cmd->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+        cmd->CopyTextureRegion(&to, 0, 0, 0, &from, boundedRoi ? &roi : nullptr);
         std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
         if (state != D3D12_RESOURCE_STATE_COPY_SOURCE)
             cmd->ResourceBarrier(1, &barrier);

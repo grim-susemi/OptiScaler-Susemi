@@ -1,5 +1,8 @@
 #include "pch.h"
 #include "IdentifyGpu.h"
+#ifdef OPTISCALER_NR_SELF_TEST
+#include "../../tests/nr_addon_host/ForbiddenStartup.h"
+#endif
 
 #include <magic_enum.hpp>
 #include <include/device_info/device_info.hpp>
@@ -42,6 +45,9 @@ using Microsoft::WRL::ComPtr;
 
 std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
 {
+#ifdef OPTISCALER_NR_SELF_TEST
+    NrAddonHost::ForbidGpuDiscovery();
+#else
     auto localCachedInfo = std::vector<GpuInformation> {};
 
     ScopedSkipSpoofingThread skipSpoofingThread {};
@@ -204,6 +210,7 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
     }
 
     return localCachedInfo;
+#endif
 }
 
 void IdentifyGpu::queryNvapi(GpuInformation& gpuInfo)
@@ -351,6 +358,12 @@ void IdentifyGpu::getHardwareAdapter(IDXGIFactory* InFactory, IDXGIAdapter** InA
 
 std::vector<GpuInformation> IdentifyGpu::getAllGpus()
 {
+#ifdef OPTISCALER_NR_SELF_TEST
+    GpuInformation fixture;
+    fixture.name = "FIXTURE: WARP UI host; physical GPU discovery disabled";
+    fixture.softwareAdapter = true;
+    return { fixture };
+#else
     thread_local bool is_fetching = false;
     if (is_fetching)
         return {};
@@ -368,6 +381,7 @@ std::vector<GpuInformation> IdentifyGpu::getAllGpus()
 
     // TODO: try to reactivate DxgiSpoofing if was auto on Nvidia cards without DLSS
     return cache;
+#endif
 }
 
 GpuInformation IdentifyGpu::getPrimaryGpu()
@@ -378,6 +392,9 @@ GpuInformation IdentifyGpu::getPrimaryGpu()
 
 void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3D12CreateDevice)
 {
+#ifdef OPTISCALER_NR_SELF_TEST
+    std::puts("HOST_GPU_CAPABILITIES fixture=1 discovery=0 providerCalls=0");
+#else
     if (hasD3d12Capabilities)
         return;
 
@@ -667,6 +684,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
         // Config::Instance()->DxgiSpoofing.set_volatile_value(true);
     }
+#endif
 }
 
 void IdentifyGpu::updateInt8Support(std::optional<bool>& sdkSupportsInt8, std::optional<bool>& amdxcffx64SupportsInt8)

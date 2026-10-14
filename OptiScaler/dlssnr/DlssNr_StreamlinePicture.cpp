@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DlssNr_StreamlinePicture.h"
+#include "DlssNr_MfgObserver.h"
 #include "DlssNrFeature_Dx12.h"
 #include <Config.h>
 #include <State.h>
@@ -16,7 +17,7 @@ using CreateHwnd = HRESULT (*)(IDXGIFactory2*, IUnknown*, HWND, const DXGI_SWAP_
                               const DXGI_SWAP_CHAIN_FULLSCREEN_DESC*, IDXGIOutput*, IDXGISwapChain1**, bool&);
 using Create = HRESULT (*)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**, bool&);
 
-void RegisterQueue(HRESULT result, bool handled, IUnknown* device, IDXGISwapChain* swapchain)
+void RegisterQueue(HRESULT result, bool handled, IUnknown* device, IDXGISwapChain* swapchain, GetBuffer getBuffer)
 {
     if (State::Instance().isShuttingDown)
         return;
@@ -27,7 +28,8 @@ void RegisterQueue(HRESULT result, bool handled, IUnknown* device, IDXGISwapChai
     {
         ID3D12CommandQueue* real = nullptr;
         if (Util::CheckForRealObject(__FUNCTION__, queue.Get(), (IUnknown**) &real)) queue = real;
-        if (SUCCEEDED(swapchain->SetPrivateDataInterface(renderQueueKey, queue.Get())))
+        if (SUCCEEDED(swapchain->SetPrivateData(bufferHookKey, sizeof(getBuffer), &getBuffer)) &&
+            SUCCEEDED(swapchain->SetPrivateDataInterface(renderQueueKey, queue.Get())))
             LOG_INFO("DLSS-NR: Streamline finished-picture handoff registered on the game render queue");
     }
 }
@@ -47,6 +49,8 @@ template <bool Local> struct Hooks
         if (State::Instance().isShuttingDown)
             return;
         const auto& cfg = *Config::Instance();
+        if (skip && !(flags & DXGI_PRESENT_TEST))
+            SkipFinishedPicture(swapchain);
         if (skip || (flags & DXGI_PRESENT_TEST) || !cfg.DlssNrEnabled.value_or_default() ||
             !cfg.DlssNrFinishedPicture.value_or_default()) return;
         auto queue = RenderQueue(swapchain);
@@ -59,27 +63,53 @@ template <bool Local> struct Hooks
     static HRESULT BeforePresent(IDXGISwapChain* swapchain, UINT interval, UINT flags, bool& skip)
     {
         Apply(swapchain, flags, skip);
-        return originalPresent(swapchain, interval, flags, skip);
+        const auto session = MfgObserver::Enabled() ? MfgObserver::Session() : 0;
+        const auto result = originalPresent(swapchain, interval, flags, skip);
+        if (session)
+        {
+            MfgObserver::Event event;
+            event.session = session;
+            event.seam = MfgObserver::Seam::StreamlinePresent;
+            event.provider = reinterpret_cast<uintptr_t>(originalPresent);
+            event.identity.consumer = MfgObserver::Value(swapchain);
+            event.result = static_cast<uint32_t>(result);
+            event.resultKnown = true;
+            MfgObserver::Publish(event);
+        }
+        return result;
     }
     static HRESULT BeforePresent1(IDXGISwapChain* swapchain, UINT interval, UINT flags,
                            const DXGI_PRESENT_PARAMETERS* parameters, bool& skip)
     {
         Apply(swapchain, flags, skip);
-        return originalPresent1(swapchain, interval, flags, parameters, skip);
+        const auto session = MfgObserver::Enabled() ? MfgObserver::Session() : 0;
+        const auto result = originalPresent1(swapchain, interval, flags, parameters, skip);
+        if (session)
+        {
+            MfgObserver::Event event;
+            event.session = session;
+            event.seam = MfgObserver::Seam::StreamlinePresent;
+            event.provider = reinterpret_cast<uintptr_t>(originalPresent1);
+            event.identity.consumer = MfgObserver::Value(swapchain);
+            event.result = static_cast<uint32_t>(result);
+            event.resultKnown = true;
+            MfgObserver::Publish(event);
+        }
+        return result;
     }
     static HRESULT CreateForHwnd(IDXGIFactory2* factory, IUnknown* device, HWND window, const DXGI_SWAP_CHAIN_DESC1* desc,
                           const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen, IDXGIOutput* output,
                           IDXGISwapChain1** swapchain, bool& skip)
     {
         const auto result = originalCreateHwnd(factory, device, window, desc, fullscreen, output, swapchain, skip);
-        if (SUCCEEDED(result) && skip && swapchain) RegisterQueue(result, skip, device, *swapchain);
+        if (SUCCEEDED(result) && skip && swapchain) RegisterQueue(result, skip, device, *swapchain, getBuffer);
         return result;
     }
     static HRESULT CreateSwapChain(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc,
                                     IDXGISwapChain** swapchain, bool& skip)
     {
         const auto result = originalCreate(factory, device, desc, swapchain, skip);
-        if (SUCCEEDED(result) && skip && swapchain) RegisterQueue(result, skip, device, *swapchain);
+        if (SUCCEEDED(result) && skip && swapchain) RegisterQueue(result, skip, device, *swapchain, getBuffer);
         return result;
     }
 

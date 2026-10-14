@@ -4,11 +4,14 @@
 #include <State.h>
 #include <Util.h>
 #include <proxies/NVNGX_Proxy.h>
+#include <misc/IdentifyGpu.h>
+#include <framegen/dlssg/MfgUnlock.h>
 #include <atomic>
 #include <mutex>
 #include <fstream>
 #include <set>
 #include <map>
+#include <memory>
 #include <bcrypt.h>
 #pragma comment(lib, "bcrypt.lib")
 
@@ -58,14 +61,16 @@ std::string Sha256(const std::filesystem::path& path)
     for (auto byte : digest) result += std::format("{:02X}", byte);
     return result;
 }
-void FileReport(const std::filesystem::path& path, const char* kind, bool hashFile)
+MfgDiagnostics::Module FileReport(const std::filesystem::path& path, const char* kind, bool hashFile)
 {
+    MfgDiagnostics::Module identity;
+    identity.path = path.wstring();
     std::error_code error;
     const bool exists = std::filesystem::is_regular_file(path, error);
     if (!exists)
     {
         LOG_INFO("NR diagnostic {}: {} [not found, filesystem error={} ]", kind, path.string(), error.value());
-        return;
+        return identity;
     }
     // Hash unchanged files only once per process, including across Retry and multiple passes.
     struct CachedHash { uintmax_t size; std::filesystem::file_time_type modified; std::string hash; };
@@ -89,6 +94,9 @@ void FileReport(const std::filesystem::path& path, const char* kind, bool hashFi
              size,
              hasVersion ? std::format("{}.{}.{}", version.major, version.minor, version.patch) : "unknown",
              digest);
+    identity.sha256 = digest.size() == 64 ? digest : "";
+    identity.version = hasVersion ? std::format("{}.{}.{}", version.major, version.minor, version.patch) : "";
+    return identity;
 }
 }
 void Install(NVSDK_NGX_LoggingInfo& logging)
@@ -147,4 +155,131 @@ void RuntimeReport(ID3D12GraphicsCommandList* commands, ID3D12Device* device, co
     }
     catch (const std::exception& e) { LOG_INFO("NR diagnostic: runtime inspection unavailable: {}", e.what()); }
 }
+MfgPreflightRequest CopyMfgRequest(LUID adapter, std::filesystem::path directory,
+                                   std::string label, unsigned run)
+{
+    MfgPreflightRequest request;
+    request.adapter = adapter;
+    request.directory = std::move(directory);
+    request.label = std::move(label);
+    request.run = run;
+#if defined(OPTISCALER_RTX40_MFG)
+    request.configured = MfgUnlock::ConfiguredTemporalMethod();
+    request.configuredAvailable = true;
+#endif
+    request.driverDispatcherPath = NVNGXProxy::NVNGXModule_Path();
+    return request;
+}
+namespace
+{
+struct ModuleReference
+{
+    HMODULE module = nullptr;
+    ~ModuleReference() { if (module) FreeLibrary(module); }
+};
+MfgDiagnostics::Report InspectMfg(const MfgPreflightRequest& request)
+{
+    MfgDiagnostics::Inputs inputs;
+    inputs.configured = request.configured;
+    inputs.configuredAvailable = request.configuredAvailable;
+    inputs.label = request.label;
+    inputs.run = request.run;
+    inputs.workerThread = GetCurrentThreadId();
+    inputs.adapterLuid = request.adapter;
+    const MfgUnlock::Telemetry* telemetry = nullptr;
+#if defined(OPTISCALER_RTX40_MFG)
+    inputs.statusAvailable = true;
+    inputs.status = MfgUnlock::LastStatus();
+    telemetry = &MfgUnlock::GetTelemetry();
+#endif
+    auto loaded = [](HMODULE module, const char* kind)
+    {
+        MfgDiagnostics::Module identity;
+        if (!module) return identity;
+        wchar_t path[32768] {};
+        const auto length = GetModuleFileNameW(module, path, (DWORD)std::size(path));
+        if (length && length < std::size(path))
+            identity = FileReport(path, kind, true);
+        identity.loaded = true;
+        return identity;
+    };
+    auto inspect = [&](const wchar_t* name, const char* kind)
+    {
+        ModuleReference reference;
+        // Take a temporary reference only to an already-loaded module, never LoadLibrary.
+        if (!GetModuleHandleExW(0, name, &reference.module)) return MfgDiagnostics::Module {};
+        return loaded(reference.module, kind);
+    };
+    ModuleReference self;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                      reinterpret_cast<LPCWSTR>(&MfgPreflight), &self.module);
+    inputs.optiscaler = loaded(self.module, "loaded OptiScaler preflight");
+    // Only bounded known handles. No module walk, load, hook, patch or retry.
+    inputs.provider = inspect(inputs.status.ModulePath.empty() ? L"nvngx_dlssg.dll" : inputs.status.ModulePath.c_str(),
+                              "loaded DLSS-G provider preflight");
+    inputs.streamline = inspect(L"sl.interposer.dll", "loaded Streamline preflight");
+    inputs.plugin = inspect(L"sl.dlss_g.dll", "loaded DLSS-G plugin preflight");
+    const auto& dispatcher = request.driverDispatcherPath;
+    if (!dispatcher.empty())
+        inputs.driverDispatcher = inspect(dispatcher.c_str(), "loaded driver dispatcher preflight");
+    if (const auto gpu = IdentifyGpu::findCachedGpu(request.adapter))
+    {
+        inputs.adapter = gpu->name;
+        if (!gpu->driverStore.empty()) inputs.driverStore = gpu->driverStore.string();
+    }
+    auto report = MfgDiagnostics::Read(inputs, telemetry);
+    LOG_INFO("NR MFG preflight: {}", MfgDiagnostics::Json(report));
+    return report;
+}
+struct MfgJob
+{
+    MfgPreflightRequest request;
+    HMODULE self = nullptr;
+};
+std::atomic<MfgQueueResult> queueResult { MfgQueueResult::Idle };
+void CALLBACK MfgWorker(PTP_CALLBACK_INSTANCE instance, void* context)
+{
+    std::unique_ptr<MfgJob> job(static_cast<MfgJob*>(context));
+    // The reference outlives destruction of all request data and the callback's return.
+    FreeLibraryWhenCallbackReturns(instance, job->self);
+    try
+    {
+        const auto report = InspectMfg(job->request);
+        std::error_code error;
+        std::filesystem::create_directories(job->request.directory, error);
+        if (error) { LOG_INFO("NR MFG preflight directory unavailable: {}", error.value()); return; }
+        std::ofstream file(job->request.directory / "mfg-preflight.json");
+        file << MfgDiagnostics::Json(report) << '\n';
+        file.close();
+        LOG_INFO("NR MFG preflight metadata write success={}", !file.fail());
+    }
+    catch (const std::exception& error) { LOG_INFO("NR MFG preflight unavailable: {}", error.what()); }
+}
+}
+MfgDiagnostics::Report MfgPreflight(LUID adapter)
+{
+    return InspectMfg(CopyMfgRequest(adapter, {}, {}, 0));
+}
+MfgQueueResult EnqueueMfgPreflight(MfgPreflightRequest request)
+{
+    auto job = std::make_unique<MfgJob>();
+    job->request = std::move(request);
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           reinterpret_cast<LPCWSTR>(&MfgWorker), &job->self))
+    {
+        queueResult.store(MfgQueueResult::ModuleReferenceUnavailable);
+        return MfgQueueResult::ModuleReferenceUnavailable;
+    }
+    if (!TrySubmitThreadpoolCallback(MfgWorker, job.get(), nullptr))
+    {
+        FreeLibrary(job->self);
+        queueResult.store(MfgQueueResult::SubmissionFailed);
+        return MfgQueueResult::SubmissionFailed;
+    }
+    job.release();
+    queueResult.store(MfgQueueResult::Submitted);
+    return MfgQueueResult::Submitted;
+}
+MfgQueueResult LastMfgQueueResult() { return queueResult.load(); }
+void ReadMfgObservation(MfgObserver::Snapshot& result) { MfgObserver::Read(result); }
 }

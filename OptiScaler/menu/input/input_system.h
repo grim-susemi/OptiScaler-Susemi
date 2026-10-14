@@ -196,6 +196,11 @@ bool Initialize(const InitializeOptions& options);
 bool Initialize(HWND targetHwnd, bool isUwp = false);
 bool Initialize(HWND targetHwnd, HWND inputHwnd, bool isUwp = false);
 
+#ifdef OPTISCALER_NR_SELF_TEST
+// The host delivers only its verified local HWND messages; no hooks or polling.
+void OwnedMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+#endif
+
 void Shutdown();
 
 void BeginFrame(HWND targetHwnd, bool isUwp = false);

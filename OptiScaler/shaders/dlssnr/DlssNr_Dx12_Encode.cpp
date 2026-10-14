@@ -171,10 +171,16 @@ void DlssNr_Dx12::State::EncodeInput(EncodeContext& context)
     encodeParams.ReversibleMode = cfg.DlssNrReversibleMode.value_or_default();
     encodeParams.Width = width;
     encodeParams.Height = height;
+    const bool signalSupported = DlssNr_Common::SetSignalEncoding(encodeParams,
+        nr.effectiveSignalEncoding, outputStatus.optionContext.nativeDx12, isHdrBuffer);
 
     TransitionTarget(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    shader.DispatchPass(cmdList, encodeParams, target, nullptr, nullptr, context.exposure, nullptr, nr.colorCopy,
-                        nr.hdrCopy);
+    if (shader.DispatchPass(cmdList, encodeParams, target, nullptr, nullptr, context.exposure, nullptr, nr.colorCopy,
+                            nr.hdrCopy))
+    {
+        outputStatus.signalEncoding = encodeParams.SignalEncoding;
+        outputStatus.signalEncodingOverrideSupported = signalSupported;
+    }
 
     if (targetSupportsUav)
         TransitionTarget(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -240,8 +246,14 @@ void DlssNr_Dx12::State::EncodeInput(EncodeContext& context)
             down.Mode = DlssNrMode_Downsample;
             down.Width = workWidth;
             down.Height = workHeight;
-            shader.DispatchPass(cmdList, down, modelInput, nullptr, nullptr, nullptr, nullptr, nr.colorSmall,
-                                nullptr);
+            const bool filterSupported = DlssNr_Common::SetInputFilter(down, width, height,
+                nr.effectiveInputFilter, outputStatus.optionContext.nativeDx12);
+            if (shader.DispatchPass(cmdList, down, modelInput, nullptr, nullptr, nullptr, nullptr, nr.colorSmall,
+                                    nullptr))
+            {
+                outputStatus.inputFilter = down.InputFilter;
+                outputStatus.inputFilterOverrideSupported = filterSupported;
+            }
             Barrier(cmdList, nr.colorSmall, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
@@ -273,9 +285,11 @@ DlssNrConstants DlssNr_Dx12::State::MakeResolveConstants(const EncodeContext& co
     resolveParams.ColourStrength = cfg.DlssNrColourStrength.value_or_default();
     resolveParams.DebugView = cfg.DlssNrDebugView.value_or_default();
     resolveParams.MaxRatio = cfg.DlssNrMaxRatio.value_or_default();
-    resolveParams.Transfer = DlssNrSpatialTransfer(cfg.DlssNrTransfer.value_or_default());
+    resolveParams.Transfer = DlssNrSpatialTransfer(reconstruction.effective);
     resolveParams.DebugScale = cfg.DlssNrWhitePointScale.value_or_default();
     resolveParams.Passthrough = isHdrBuffer ? 0u : 1u;
+    DlssNr_Common::SetSignalEncoding(resolveParams, nr.effectiveSignalEncoding,
+                                     outputStatus.optionContext.nativeDx12, isHdrBuffer);
     resolveParams.ReversibleMode = cfg.DlssNrReversibleMode.value_or_default();
     resolveParams.ApplyModel = cfg.DlssNrApplyModel.value_or_default() ? 1u : 0u;
     resolveParams.CompareMode = cfg.DlssNrCompare.value_or_default();

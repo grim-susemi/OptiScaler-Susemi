@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "DlssNr_Dx12_State.h"
+#include <dlssnr/DlssNr_StreamlinePicture.h>
 
 auto DlssNr_Dx12::State::LateContext::Say(const char* message) -> void
 {
@@ -131,16 +132,28 @@ auto DlssNr_Dx12::State::LateContext::Arm(Slot& slot, ID3D12GraphicsCommandList*
     LOG_DEBUG("NR late slot {} armed owned=1 pending=1 ready={} done={}", slot.serial, slot.ready, slot.done);
 }
 
-auto DlssNr_Dx12::State::LateContext::Capture(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, bool rr) -> void
+auto DlssNr_Dx12::State::LateContext::Capture(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params,
+                                             bool rr, bool interop) -> void
 {
-    if (!params)
+    if (!cmd || !params)
+    {
+        Cancel();
         return;
+    }
     // Per-pool consumer invariant: a capture armed while the route's consumer is known to
     // be unavailable stays owned with nothing to resolve it (the live starvation), so no
     // capture in this pool may be armed - the residual route below enforces the same rule
     // through the same production predicate.
     if (!DlssNr::FinishedConsumerAdmitsCapture())
         return;
+    const bool legacyBridge = ::State::Instance().swapchainApi == API::DX11 ||
+                              ::State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
+    if (!legacyBridge && (!consumer.Known() || !consumer.applicationKnown || !consumerOwner || !consumerDevice))
+    {
+        Cancel();
+        Say("The application picture consumer is not known.");
+        return;
+    }
     auto* depth = owner.GetResource(params, NVSDK_NGX_Parameter_Depth, "DLSSD.Depth");
     auto* motion = owner.GetResource(params, NVSDK_NGX_Parameter_MotionVectors, "DLSSD.MotionVectors");
     auto* output = owner.GetResource(params, NVSDK_NGX_Parameter_Output, "DLSSD.Output");
@@ -150,31 +163,23 @@ auto DlssNr_Dx12::State::LateContext::Capture(ID3D12GraphicsCommandList* cmd, NV
         Say("Waiting for the game's depth and movement data.");
         return;
     }
+    if (!legacyBridge && std::any_of(slots.begin(), slots.end(), [&](const auto& slot) {
+            return slot.pending && !slot.identity.SameConsumer(consumer);
+        }))
+        Cancel();
     auto* next = Acquire(cmd);
     if (!next)
         return;
     auto& slot = *next;
-    if (!Clone(slot.depth, depth) || !Clone(slot.motion, motion))
-    {
-        Say("The game's depth or movement data is not supported.");
-        return;
-    }
+    slot.identity = consumer;
+    slot.consumerOwner = consumerOwner;
+    slot.consumerDevice = consumerDevice;
+    slot.guidesValid = false;
     slot.residualOnly = false;
     slot.responseValid = slot.cleanSceneValid = false;
-    // Copy at the NGX seam, where guide states and lifetimes are defined. Keep typed,
-    // shader-readable copies until both the producing queue and NR have finished.
-    for (auto pair : { std::pair { depth, slot.depth.Get() }, std::pair { motion, slot.motion.Get() } })
-    {
-        owner.Barrier(cmd, pair.first, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                      D3D12_RESOURCE_STATE_COPY_SOURCE);
-        cmd->CopyResource(pair.second, pair.first);
-        owner.Barrier(cmd, pair.first, D3D12_RESOURCE_STATE_COPY_SOURCE,
-                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        // The copy returns to COPY_DEST after the late dispatch.
-    }
     slot.frame = {};
     auto& frame = slot.frame;
-    unsigned flags = 0, gameReset = 0;
+    unsigned flags = owner.featureFlags, gameReset = 0;
     params->Get(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, &flags);
     params->Get(NVSDK_NGX_Parameter_Reset, &gameReset);
     frame.Reset = gameReset != 0;
@@ -192,16 +197,59 @@ auto DlssNr_Dx12::State::LateContext::Capture(ID3D12GraphicsCommandList* cmd, NV
     params->Get(NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, &frame.MotionSubrectBaseY);
     params->Get(NVSDK_NGX_Parameter_MV_Scale_X, &frame.MvScaleX);
     params->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &frame.MvScaleY);
-    if (!std::isfinite(frame.MvScaleX) || frame.MvScaleX == 0)
-        frame.MvScaleX = 1;
-    if (!std::isfinite(frame.MvScaleY) || frame.MvScaleY == 0)
-        frame.MvScaleY = 1;
     frame.ColourIsLinearHdr = false;
     frame.IndependentCommands = true;
     frame.FinishedPicture = true;
     frame.OutputArrivalState = D3D12_RESOURCE_STATE_PRESENT;
-    frame.SubmissionEpoch = ::State::Instance().frameCount;
+    frame.SubmissionEpoch = legacyBridge ? ::State::Instance().frameCount : slot.identity.application;
+    // Even unusable current metadata identifies the newest producer packet. Its
+    // recording remains owned until actual submission or a proven Reset.
     Arm(slot, cmd);
+    ComPtr<ID3D12Device> depthDevice, motionDevice, outputDevice;
+    const auto states = DlssNr::ResolveInputStates_Dx12(interop);
+    const auto knownState = [](D3D12_RESOURCE_STATES state)
+    {
+        return state == D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE ||
+               state == (D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) ||
+               state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS || state == D3D12_RESOURCE_STATE_COPY_SOURCE ||
+               state == D3D12_RESOURCE_STATE_DEPTH_READ;
+    };
+    const auto fits = [](const D3D12_RESOURCE_DESC& allocation, unsigned x, unsigned y, unsigned w, unsigned h)
+    {
+        return allocation.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D && allocation.SampleDesc.Count == 1 &&
+               allocation.DepthOrArraySize == 1 && allocation.MipLevels == 1 &&
+               x < allocation.Width && y < allocation.Height &&
+               (!w || w <= allocation.Width - x) && (!h || h <= allocation.Height - y);
+    };
+    const auto motionW = frame.MotionVectorsLowResolution ? frame.RenderSubrectWidth : frame.OutputWidth;
+    const auto motionH = frame.MotionVectorsLowResolution ? frame.RenderSubrectHeight : frame.OutputHeight;
+    if (FAILED(depth->GetDevice(IID_PPV_ARGS(&depthDevice))) ||
+        FAILED(motion->GetDevice(IID_PPV_ARGS(&motionDevice))) ||
+        FAILED(output->GetDevice(IID_PPV_ARGS(&outputDevice))) ||
+        !DlssNr::StreamlinePicture::SameDevice(device.Get(), depthDevice.Get()) ||
+        !DlssNr::StreamlinePicture::SameDevice(device.Get(), motionDevice.Get()) ||
+        !DlssNr::StreamlinePicture::SameDevice(device.Get(), outputDevice.Get()) ||
+        (!legacyBridge && !DlssNr::StreamlinePicture::SameDevice(device.Get(), slot.consumerDevice.Get())) ||
+        !knownState(states.depth) || !knownState(states.motion) ||
+        !fits(depth->GetDesc(), frame.DepthSubrectBaseX, frame.DepthSubrectBaseY,
+              frame.RenderSubrectWidth, frame.RenderSubrectHeight) ||
+        !fits(motion->GetDesc(), frame.MotionSubrectBaseX, frame.MotionSubrectBaseY, motionW, motionH) ||
+        !frame.OutputWidth || !frame.OutputHeight || !std::isfinite(frame.FrameTimeMs) || frame.FrameTimeMs <= 0 ||
+        !std::isfinite(frame.MvScaleX) || frame.MvScaleX == 0 ||
+        !std::isfinite(frame.MvScaleY) || frame.MvScaleY == 0 ||
+        !Clone(slot.depth, depth) || !Clone(slot.motion, motion))
+    {
+        Say("The current depth, movement region or resource state is not usable.");
+        return;
+    }
+    for (auto pair : { std::pair { depth, slot.depth.Get() }, std::pair { motion, slot.motion.Get() } })
+    {
+        const auto arrival = pair.first == depth ? states.depth : states.motion;
+        owner.Barrier(cmd, pair.first, arrival, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmd->CopyResource(pair.second, pair.first);
+        owner.Barrier(cmd, pair.first, D3D12_RESOURCE_STATE_COPY_SOURCE, arrival);
+    }
+    slot.guidesValid = true;
 }
 
 auto DlssNr_Dx12::State::LateContext::CaptureResidual(ID3D12GraphicsCommandList* cmd, ID3D12Resource* clean, ID3D12Resource* residual,

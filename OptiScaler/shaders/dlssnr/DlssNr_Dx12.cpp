@@ -1,5 +1,7 @@
 #include "pch.h"
 #include <dlssnr/DlssNr_StreamlinePicture.h>
+#include <dlssnr/DlssNr_NgxDiagnostics.h>
+#include <dlssnr/DlssNr_MfgObserverNgx.h>
 #include "DlssNr_Dx12_State.h"
 #include "DlssNr_NativeProbe.h"
 #include <atomic>
@@ -228,6 +230,7 @@ void DlssNr_Dx12::Retire(std::unique_ptr<DlssNr_Dx12> owner)
     {
         std::lock_guard stateLock(owner->_state->mutex);
         owner->_state->late.Cancel();
+        if (owner->_state->pipelineSession) owner->_state->pipelineSession->Cancel();
     }
     RetiredNrOwners().push_back(std::move(owner));
     LOG_INFO("DLSS-NR: retaining retired GPU owner until recordings finish; {} waiting", RetiredNrOwners().size());
@@ -265,6 +268,7 @@ void DlssNr_Dx12::FinishSubmitted()
 
 DlssNr_Dx12::~DlssNr_Dx12()
 {
+    DlssNr::MfgObserver::Stop(this);
     if (::State::Instance().isShuttingDown)
     {
         _state.release();
@@ -421,13 +425,18 @@ void DlssNr_Dx12::EndInputHold(NVSDK_NGX_Parameter* params)
 
 bool DlssNr_Dx12::ProcessSeam(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* params, bool beforeUpscale,
                               ID3D12CommandQueue* queue, bool rayReconstruction, unsigned long long submissionEpoch,
-                              bool interop, uint32_t featureFlags)
+                              bool interop, uint32_t featureFlags,
+                              const DlssNr::StreamlinePicture::ConsumerSnapshot& consumer)
 {
     std::lock_guard ownersLock(nrOwnersMutex);
     ActivateNrOwner(this);
     std::lock_guard stateLock(_state->mutex);
     _state->ConsumeControls();
     _state->featureFlags = featureFlags;
+    _state->late.consumer = consumer.identity;
+    _state->late.consumer.owner = this;
+    _state->late.consumerOwner = consumer.retained;
+    _state->late.consumerDevice = consumer.device;
     const auto& cfg = *Config::Instance();
     // Both seams reach this scheduler; ordinary passes remain in the shared shader pipeline.
     const auto placement = DlssNr::ResolvePlacement(
@@ -453,18 +462,25 @@ bool DlssNr_Dx12::ProcessSeam(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Paramete
         _state->deferredSr.Cancel();
     }
     _state->Publish();
+    DlssNr::MfgObserver::NrParameters(this, _state->late.consumer, beforeUpscale, params, cmd);
     return special;
 }
-void DlssNr_Dx12::DiagnosePipeline(unsigned stage, ID3D12GraphicsCommandList* cmd,
-                                  NVSDK_NGX_Parameter* params, ID3D12Resource* color,
-                                  uint32_t flags, bool rr, bool success)
+void DlssNr_Dx12::DiagnosePipeline(unsigned stage, ID3D12GraphicsCommandList* commands,
+                                  NVSDK_NGX_Parameter* parameters, ID3D12Resource* colour,
+                                  uint32_t, bool, bool)
 {
     std::lock_guard ownersLock(nrOwnersMutex);
     std::lock_guard stateLock(_state->mutex);
     auto& state = *_state;
     if (stage == 0)
     {
-        state.lifetime.Collect();
+        if (!Config::Instance()->DlssNrEnabled.value_or_default())
+        {
+            DlssNr::MfgObserver::Stop(this);
+            if (state.pipelineSession) state.pipelineSession->Cancel();
+            state.pipelineCapture.reset();
+            return;
+        }
         static bool previousGameplay = false, previousPhoto = false;
         static unsigned runs = 0;
         DWORD foregroundProcess = 0;
@@ -476,11 +492,10 @@ void DlssNr_Dx12::DiagnosePipeline(unsigned stage, ID3D12GraphicsCommandList* cm
         const char* label = gameplay && !previousGameplay ? "gameplay" :
                             photo && !previousPhoto ? "photomode" : nullptr;
         previousGameplay = gameplay; previousPhoto = photo;
-        if (label && !state.pipelineCaptureRemaining && !nrCaptureOutstanding)
+        if (label && !state.pipelineCaptureRemaining && !nrCaptureOutstanding &&
+            !DlssNr::PipelineCaptureSession::Busy())
         {
-            if (runs >= 2)
-                LOG_WARN("NR pipeline capture: two-run limit reached; restart to capture again");
-            else
+            if (runs < 2)
             {
                 ++runs;
                 SYSTEMTIME time {}; GetLocalTime(&time);
@@ -488,124 +503,159 @@ void DlssNr_Dx12::DiagnosePipeline(unsigned stage, ID3D12GraphicsCommandList* cm
                 std::snprintf(folder, sizeof(folder), "%04u%02u%02u-%02u%02u%02u-%03u-%s-%u",
                     time.wYear, time.wMonth, time.wDay, time.wHour, time.wMinute, time.wSecond,
                     time.wMilliseconds, label, runs);
-                state.pipelineCaptureDirectory = Util::DllPath().parent_path() / "nr-pipeline-captures" / folder;
-                state.pipelineCaptureRemaining = 4;
-                LOG_INFO("NR pipeline capture armed: {} (four frames)", state.pipelineCaptureDirectory.string());
+                auto request = DlssNr::NgxDiagnostics::CopyMfgRequest(
+                    _device->GetAdapterLuid(),
+                    Util::DllPath().parent_path() / "nr-pipeline-captures" / folder, label, runs);
+                if (DlssNr::NgxDiagnostics::EnqueueMfgPreflight(std::move(request)) ==
+                    DlssNr::NgxDiagnostics::MfgQueueResult::Submitted)
+                {
+                    DlssNr::MfgObserver::Begin(this, runs);
+                    state.pipelineCaptureDirectory = Util::DllPath().parent_path() / "nr-pipeline-captures" / folder;
+                    state.pipelineSession = DlssNr::PipelineCaptureSession::Begin(state.pipelineCaptureDirectory);
+                }
             }
         }
-        if (!state.pipelineCaptureRemaining || state.pipelineCapture) return;
-        auto job = std::make_unique<DlssNr::PipelineCaptureFrame>();
-        if (!job->Init(_device))
-        { state.pipelineCaptureRemaining = 0; LOG_ERROR("NR pipeline capture allocation failed"); return; }
-        job->directory = state.pipelineCaptureDirectory / std::to_string(4 - state.pipelineCaptureRemaining);
-        job->metadata << "stage_semantics before_nr=scene_linear_input after_nr=NR_composed_RR_input "
-                         "after_rr=upscaler_output_before_postprocessing\n"
-                      << "game_frame " << ::State::Instance().frameCount << " command_list " << cmd
-                      << " parameters " << params << " rr " << rr << " feature_flags " << flags << '\n';
-        const auto& cfg = *Config::Instance();
-        job->metadata << "nr_passes " << cfg.DlssNrPasses.value_or_default()
-                      << " working_scale " << cfg.DlssNrWorkingScale.value_or_default()
-                      << " nr_history_reset " << state.nr.reset
-                      << " hold " << cfg.DlssNrHoldFrame.value_or_default() << '\n';
-        for (const char* key : { NVSDK_NGX_Parameter_Reset, NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width,
-             NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, NVSDK_NGX_Parameter_OutWidth,
-             NVSDK_NGX_Parameter_OutHeight, NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X,
-             NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X,
-             NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y })
-        {
-            unsigned value = 0; auto result = params->Get(key, &value);
-            job->metadata << key << ' ' << value << " get_result " << unsigned(result) << '\n';
-        }
-        for (const char* key : { NVSDK_NGX_Parameter_MV_Scale_X, NVSDK_NGX_Parameter_MV_Scale_Y,
-             NVSDK_NGX_Parameter_Jitter_Offset_X, NVSDK_NGX_Parameter_Jitter_Offset_Y,
-             NVSDK_NGX_Parameter_DLSS_Pre_Exposure, NVSDK_NGX_Parameter_DLSS_Exposure_Scale,
-             NVSDK_NGX_Parameter_FrameTimeDeltaInMsec })
-        {
-            float value = 0; auto result = params->Get(key, &value);
-            job->metadata << key << ' ' << value << " get_result " << unsigned(result) << '\n';
-        }
-        // Record descriptors of optional RR inputs without assuming their presence.
-        for (const char* key : { "DLSS.Input.DiffuseAlbedo", "DLSS.Input.SpecularAlbedo", "GBuffer.Normals",
-             "GBuffer.Roughness", "MotionVectorsReflection", "DLSSD.SpecularHitDistance",
-             "DLSS.Input.ColorBeforeParticles", "DLSSD.DiffuseHitDistance" })
-        {
-            auto* resource = state.GetResource(params, key, key);
-            job->metadata << key << " resource " << resource;
-            if (resource)
-            { auto desc = resource->GetDesc(); job->metadata << " width " << desc.Width << " height " << desc.Height
-                                                           << " format " << desc.Format; }
-            job->metadata << '\n';
-        }
-        state.pipelineCapture = job.release();
-        ++nrCaptureOutstanding;
-        state.lifetime.Record(cmd);
-        const auto inputs = DlssNr::ResolveInputStates_Dx12(false);
-        state.pipelineCapture->Copy(cmd, _device, "before_nr", color, inputs.color);
-        state.pipelineCapture->Copy(cmd, _device, "motion", state.GetResource(params,
-            NVSDK_NGX_Parameter_MotionVectors, "DLSSD.MotionVectors"), inputs.motion);
-        state.pipelineCapture->Copy(cmd, _device, "depth", state.GetResource(params,
-            NVSDK_NGX_Parameter_Depth, "DLSSD.Depth"), inputs.depth);
-        state.pipelineCapture->Copy(cmd, _device, "exposure", state.GetResource(params,
-            NVSDK_NGX_Parameter_ExposureTexture, "DLSSD.ExposureTexture"), inputs.exposure);
-        return;
     }
-    auto* job = state.pipelineCapture;
-    if (!job) return;
-    job->metadata << "stage " << stage << " success " << success << '\n';
-    if (stage == 1)
+    DlssNr::MfgObserver::Nr(this, state.late.consumer, stage, colour);
+    if (!state.pipelineSession) return;
+    if (stage == 0)
     {
-        job->metadata << "nr_model_evaluated " << state.modelRunning << '\n';
-        job->Copy(cmd, _device, "after_nr", color, DlssNr::ResolveInputStates_Dx12(false).color);
-        return;
+        if (state.pipelineCapture && !state.pipelineCapture->sealed) state.pipelineCapture->Cancel();
+        const auto& consumer = state.late.consumer;
+        state.pipelineCapture = state.pipelineSession->Admit(
+            { reinterpret_cast<uintptr_t>(this), reinterpret_cast<uintptr_t>(consumer.consumer),
+              consumer.generation, consumer.application, consumer.applicationKnown }, state.lifetime, commands);
+        if (state.pipelineCapture)
+        {
+            state.pipelineCapture->Unavailable("borrowed_pipeline_input", colour);
+            state.pipelineCapture->Unavailable("provider_real_output");
+            state.pipelineCapture->Unavailable("provider_generated_output");
+            ID3D12Resource* exposure = nullptr;
+            if (parameters)
+            {
+                auto& capture = *state.pipelineCapture;
+                float rawPreExposure = 0;
+                capture.preExposureReadAttempted = true;
+                const auto preResult = parameters->Get(NVSDK_NGX_Parameter_DLSS_Pre_Exposure, &rawPreExposure);
+                capture.preExposureReadResult = static_cast<uint32_t>(preResult);
+                capture.preExposureReadSucceeded = NVSDK_NGX_SUCCEED(preResult);
+                if (capture.preExposureReadSucceeded)
+                    std::memcpy(&capture.preExposureBits, &rawPreExposure, sizeof(rawPreExposure));
+                const auto exposureResult = parameters->Get(NVSDK_NGX_Parameter_ExposureTexture, &exposure);
+                capture.exposureReadResult = static_cast<uint32_t>(exposureResult);
+                capture.exposureReadSucceeded = NVSDK_NGX_SUCCEED(exposureResult);
+            }
+            state.pipelineCapture->Unavailable("exposure", exposure);
+            state.pipelineCapture->Unavailable("nr_output");
+        }
     }
-    if (success) job->Copy(cmd, _device, "after_rr", color, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    job->End(cmd);
-    state.pipelineCapture = nullptr;
-    --state.pipelineCaptureRemaining;
-    state.lifetime.Retire([job]
+    else if (stage == 2 && state.pipelineCapture)
     {
-        if (job->Write()) LOG_INFO("NR pipeline capture saved: {}", job->directory.string());
-        else LOG_WARN("NR pipeline capture discarded or write failed: {}", job->directory.string());
-        delete job;
-        --nrCaptureOutstanding;
-    });
+        state.pipelineCapture->Seal();
+        state.pipelineCapture.reset();
+    }
 }
 
 void DlssNr_Dx12::ResetFinishedCommands(ID3D12CommandList* cmd) { _state->FinishedPictureResetCommandList(cmd); }
 void DlssNr_Dx12::PromiseFinishedCommands(DlssNr::LatePromiseBatch& batch, ID3D12CommandQueue* queue, UINT count,
                                           ID3D12CommandList* const* lists)
 {
+    std::lock_guard stateLock(_state->mutex);
+    if (auto capture = _state->lifetime.PrepareCapture(queue, count, lists))
+    {
+        DlssNr::LatePromiseEntry entry {};
+        entry.owner = this;
+        entry.slot = UINT_MAX;
+        entry.captureSubmitted = std::move(capture);
+        batch.push_back(std::move(entry));
+    }
     _state->FinishedPicturePromised(batch, this, queue, count, lists);
 }
 void DlssNr_Dx12::SubmitFinishedCommands(DlssNr::LatePromiseBatch& batch, ID3D12CommandQueue* queue, UINT count,
                                          ID3D12CommandList* const* lists)
 {
+    std::erase_if(batch, [this](auto& entry)
+    {
+        if (entry.owner != this || !entry.captureSubmitted) return false;
+        auto resolve = std::move(entry.captureSubmitted);
+        resolve();
+        return true;
+    });
     _state->FinishedPictureSubmitted(batch, this, queue, count, lists);
 }
 bool DlssNr_Dx12::WaitFinished() { return _state->WaitForFinishedPicture(); }
+#ifdef OPTISCALER_NR_SELF_TEST
+thread_local std::optional<DlssNr::FinishedCallerFixture> DlssNr::FinishedStatusFixture;
+thread_local std::optional<DlssNr::OutputStatus> DlssNr::FinishedStatusObserved;
+#endif
 bool DlssNr_Dx12::ApplyFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
-                                bool gameFrameHandoff)
+                                bool gameFrameHandoff, const DlssNr::FinishedIdentity& consumer,
+                                uint64_t captureSerial)
 {
     std::lock_guard lock(_state->mutex);
+#ifdef OPTISCALER_NR_SELF_TEST
+    const auto fixture = std::exchange(DlssNr::FinishedStatusFixture, {});
+    if (fixture)
+    {
+        _state->outputStatus = fixture->output;
+        _state->modelFacts = static_cast<const DlssNr::ModelFacts&>(fixture->output);
+        _state->modelFacts.contextState = DlssNr::ModelContextState::Current;
+        _state->modelFacts.backend = fixture->backend;
+        _state->modelFacts.identity = consumer;
+        _state->modelFacts.identity.owner = this;
+        _state->late.consumer = consumer;
+        _state->late.consumer.owner = this;
+        DlssNr::FinishedStatusObserved.reset();
+        if (fixture->stage == DlssNr::FinishedFixtureStage::Capture)
+        {
+            _state->EvaluateInternal(nullptr, nullptr, true, nullptr, false, consumer.application, false);
+            _state->Publish();
+            DlssNr::FinishedStatusObserved = DlssNr::ReadStatus(DlssNr::Backend::Dx12).output;
+        }
+    }
+#endif
     bool ran = false;
+    _state->modelFacts.ValidateCurrent(DlssNr::Backend::Dx12, consumer);
+    _state->outputStatus.ResetOutcome();
+    _state->outputStatus.state = DlssNr::OutputState::Skipped;
+    _state->outputStatus.reason = DlssNr::OutputReason::Admission;
+    _state->outputStatus.application = consumer.applicationKnown ? consumer.application : 0;
+    _state->outputStatus.generation = consumer.Known() ? consumer.generation : 0;
     if (!Config::Instance()->DlssNrFinishedPicture.value_or_default() ||
         !Config::Instance()->DlssNrEnabled.value_or_default())
         _state->late.Cancel();
     else if (picture && queue)
-        ran = _state->ApplyFinishedColor(picture, queue, space, gameFrameHandoff);
+    {
+#ifdef OPTISCALER_NR_SELF_TEST
+        // Isolate the real internal reset after the public reset, so both
+        // production call sites must preserve the seeded model/input facts.
+        if (fixture && fixture->stage == DlssNr::FinishedFixtureStage::Internal)
+            _state->outputStatus = fixture->output;
+#endif
+        ran = _state->ApplyFinishedColor(picture, queue, space, gameFrameHandoff, consumer, captureSerial);
+    }
     _state->Publish();
     return ran;
 }
 bool DlssNr_Dx12::PendingFinishedCapture(ID3D12Resource* picture, ID3D12CommandQueue* queue,
-                                         DXGI_COLOR_SPACE_TYPE space, DlssNr::XeFGCapture& facts)
+                                         DXGI_COLOR_SPACE_TYPE space, DlssNr::XeFGCapture& facts,
+                                         const DlssNr::FinishedIdentity& consumer)
 {
     std::lock_guard lock(_state->mutex);
-    return _state->PendingFinishedCapture(picture, queue, space, facts);
+    return _state->PendingFinishedCapture(picture, queue, space, facts, consumer);
 }
-void DlssNr_Dx12::CloseFinishedCaptures(uint64_t throughSerial)
+void DlssNr_Dx12::CloseFinishedCaptures(uint64_t throughSerial, const DlssNr::FinishedIdentity& consumer)
 {
     std::lock_guard lock(_state->mutex);
-    _state->CloseFinishedCaptures(throughSerial);
+    _state->CloseFinishedCaptures(throughSerial, consumer);
+    auto& output = _state->outputStatus;
+    if (output.state != DlssNr::OutputState::Failed &&
+        (!consumer.consumer || _state->late.consumer.consumer == consumer.consumer))
+    {
+        output.state = DlssNr::OutputState::Skipped;
+        output.reason = DlssNr::OutputReason::Admission;
+        _state->Publish();
+    }
 }
 void DlssNr_Dx12::ApplyFinishedDx11(IDXGISwapChain* swapchain)
 {
@@ -619,9 +669,21 @@ std::string DlssNr_Dx12::DeferredStatus() { return _state->DeferredDlssStatus();
 // (the class wrappers above hold it): the pending-capture facts for a finished
 // application picture, and interval closure for refused/skipped captures.
 bool DlssNr_Dx12::State::PendingFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue,
-                                                DXGI_COLOR_SPACE_TYPE colorSpace, DlssNr::XeFGCapture& facts)
+                                                DXGI_COLOR_SPACE_TYPE colorSpace, DlssNr::XeFGCapture& facts,
+                                                const DlssNr::FinishedIdentity& consumer)
 {
     facts = DlssNr::XeFGCapture {};
+    const auto& config = *Config::Instance();
+    const bool direct = !DlssNr::ResolvePlacement(config.DlssNrRunBeforeSr.value_or_default(),
+        config.DlssNrDeferredDlss.value_or_default(), config.DlssNrResidualAcrossRr.value_or_default(), true).deferred;
+    if (direct)
+    {
+        if (colorSpace != DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 &&
+            colorSpace != DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 &&
+            colorSpace != DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)
+            return false;
+        return AdmitFinishedCapture(color, queue, consumer, facts, false);
+    }
     if (color == nullptr || queue == nullptr)
         return false;
     if (!late.tracking.load())
@@ -921,7 +983,7 @@ bool DlssNr_Dx12::State::PendingFinishedCapture(ID3D12Resource* color, ID3D12Com
     return true;
 }
 
-void DlssNr_Dx12::State::CloseFinishedCaptures(uint64_t throughSerial)
+void DlssNr_Dx12::State::CloseFinishedCaptures(uint64_t throughSerial, const DlssNr::FinishedIdentity& consumer)
 {
     // Closed here means never selected again - presentation invalidation only. The game
     // command list that recorded into the slot can still execute afterwards, so ownership,
@@ -931,7 +993,8 @@ void DlssNr_Dx12::State::CloseFinishedCaptures(uint64_t throughSerial)
     if (!late.tracking.load())
         return;
     for (auto& slot : late.slots)
-        if (slot.pending && slot.serial <= throughSerial)
+        if (slot.pending && slot.serial <= throughSerial &&
+            (!consumer.consumer || slot.identity.consumer == consumer.consumer))
         {
             if (slot.owned)
                 LOG_DEBUG("NR late slot {} closed while owned (recording unresolved)", slot.serial);
@@ -993,6 +1056,34 @@ static DXGI_COLOR_SPACE_TYPE ReadFinishedSpace(IDXGISwapChain* swapchain, ID3D12
     swapchain->GetPrivateData(FinishedColorSpaceKey, &size, &space);
     return space;
 }
+StreamlinePicture::ConsumerSnapshot CaptureFinishedConsumer()
+{
+    if (::State::Instance().isShuttingDown || FinishedConsumerUnavailable())
+        return {};
+    const auto& cfg = *Config::Instance();
+    const auto placement = ResolvePlacement(cfg.DlssNrRunBeforeSr.value_or_default(),
+        cfg.DlssNrDeferredDlss.value_or_default(), cfg.DlssNrResidualAcrossRr.value_or_default(),
+        cfg.DlssNrFinishedPicture.value_or_default());
+    if (!cfg.DlssNrEnabled.value_or_default() || !placement.finished || placement.deferred)
+        return {};
+    const bool xefg = CurrentFinishedConsumer() == FinishedConsumer::XeFGAvailable;
+    auto* swapchain = xefg
+                          ? ::State::Instance().currentFGSwapchain : ::State::Instance().currentSwapchain;
+    IDXGISwapChain* real = nullptr;
+    if (swapchain && Util::CheckForRealObject(__FUNCTION__, swapchain, (IUnknown**) &real))
+        swapchain = real;
+    auto consumer = StreamlinePicture::Consumer(swapchain);
+    if (xefg)
+    {
+        if (!::State::Instance().currentFG)
+            return {};
+        // IFGFeature::FrameCount is supplied by application markers/StartNewFrame.
+        // It is not State.frameCount or the generated present/index counter.
+        consumer.identity.application = ::State::Instance().currentFG->FrameCount();
+        consumer.identity.applicationKnown = true;
+    }
+    return consumer;
+}
 void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue)
 {
     if (::State::Instance().isShuttingDown)
@@ -1000,6 +1091,7 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
     Microsoft::WRL::ComPtr<IDXGISwapChain3> chain;
     Microsoft::WRL::ComPtr<ID3D12Resource> picture;
     auto space = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+    StreamlinePicture::ConsumerSnapshot consumer {};
     const auto& config = *Config::Instance();
     // Swapchain calls must precede NR locks: FG Present can submit commands while holding its own lock.
     if (swapchain && queue && config.DlssNrEnabled.value_or_default() &&
@@ -1009,10 +1101,11 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
             FAILED(chain->GetBuffer(chain->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&picture))))
             return;
         space = ReadFinishedSpace(swapchain, picture.Get());
+        consumer = StreamlinePicture::Consumer(swapchain);
     }
     std::lock_guard lock(nrOwnersMutex);
     if (activeNrOwner)
-        activeNrOwner->ApplyFinished(picture.Get(), queue, space);
+        activeNrOwner->ApplyFinished(picture.Get(), queue, space, false, consumer.identity);
 }
 void ApplyToStreamlinePicture(IDXGISwapChain* swapchain, ID3D12Resource* picture, ID3D12CommandQueue* queue)
 {
@@ -1021,9 +1114,23 @@ void ApplyToStreamlinePicture(IDXGISwapChain* swapchain, ID3D12Resource* picture
     if (!swapchain || !picture || !queue)
         return;
     const auto space = ReadFinishedSpace(swapchain, picture);
+    const auto consumer = StreamlinePicture::Consumer(swapchain);
     std::lock_guard lock(nrOwnersMutex);
     if (activeNrOwner)
-        activeNrOwner->ApplyFinished(picture, queue, space, true);
+        activeNrOwner->ApplyFinished(picture, queue, space, true, consumer.identity);
+}
+void SkipFinishedPicture(IDXGISwapChain* swapchain)
+{
+    if (::State::Instance().isShuttingDown || !swapchain)
+        return;
+    Microsoft::WRL::ComPtr<IUnknown> retained;
+    if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&retained))))
+        return;
+    FinishedIdentity consumer {};
+    consumer.consumer = retained.Get();
+    std::lock_guard lock(nrOwnersMutex);
+    if (activeNrOwner)
+        activeNrOwner->CloseFinishedCaptures(UINT64_MAX, consumer);
 }
 
 // XeFG owned application-frame handoff (todo 10). The wiring in XeFG_Dx12::Present()
@@ -1032,17 +1139,18 @@ void ApplyToStreamlinePicture(IDXGISwapChain* swapchain, ID3D12Resource* picture
 // never become a later frame's NR input. All three take the NR locks; the caller queries
 // swapchain/buffer/colour space BEFORE calling (ApplyToFinishedPicture ordering).
 bool XeFGPendingCapture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
-                        XeFGCapture& facts)
+                        XeFGCapture& facts, const FinishedIdentity& consumer)
 {
     if (::State::Instance().isShuttingDown)
         return false;
     std::lock_guard lock(nrOwnersMutex);
     if (activeNrOwner == nullptr)
         return false;
-    return activeNrOwner->PendingFinishedCapture(picture, queue, space, facts);
+    return activeNrOwner->PendingFinishedCapture(picture, queue, space, facts, consumer);
 }
 
-bool ApplyXeFGPicture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space)
+bool ApplyXeFGPicture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
+                      const XeFGCapture& capture)
 {
     if (::State::Instance().isShuttingDown)
         return false;
@@ -1051,7 +1159,8 @@ bool ApplyXeFGPicture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_C
         return false;
     // Real-game-frame semantics: ApplyFinishedColor consumes the pending capture without
     // the display-frame epoch rule (DlssNr_Dx12_FinishedCompose.cpp gameFrameHandoff).
-    return activeNrOwner->ApplyFinished(picture, queue, space, /*gameFrameHandoff=*/true);
+    return activeNrOwner->ApplyFinished(picture, queue, space, /*gameFrameHandoff=*/true,
+                                        capture.identity, capture.serial);
 }
 
 void XeFGCloseCaptures(uint64_t throughSerial)

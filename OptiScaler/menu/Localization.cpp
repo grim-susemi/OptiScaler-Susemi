@@ -133,6 +133,8 @@ struct Context
 {
     int language = 0;
     int depth = 0;
+    const char* displayLabel = nullptr;
+    const char* displayKey = nullptr;
     std::unordered_map<std::string, std::string> cache;
 };
 thread_local Context context;
@@ -431,7 +433,9 @@ std::string Translate(std::string_view source)
     if (context.language == 0 || source.empty())
         return std::string(source);
 
-    const auto key = Normalize(source);
+    const auto key = context.displayLabel != nullptr && source == context.displayLabel
+                         ? Normalize(context.displayKey)
+                         : Normalize(source);
     if (auto found = context.cache.find(key); found != context.cache.end())
         return found->second;
 
@@ -443,6 +447,19 @@ std::string Translate(std::string_view source)
     const auto result = TranslateNormalized(key, 0);
     context.cache.emplace(key, result);
     return result;
+}
+
+DisplayAlias::DisplayAlias(const char* label, const char* catalogKey)
+    : previousLabel(context.displayLabel), previousKey(context.displayKey)
+{
+    context.displayLabel = label;
+    context.displayKey = catalogKey;
+}
+
+DisplayAlias::~DisplayAlias()
+{
+    context.displayLabel = previousLabel;
+    context.displayKey = previousKey;
 }
 
 LocalizedRange::LocalizedRange(const char*& begin, const char*& end)

@@ -29,9 +29,25 @@
 //      not leave the state stuck (XeFG release ordering).
 // ============================================================================
 #include <atomic>
+#include <cstdint>
 
 namespace DlssNr
 {
+struct FinishedIdentity
+{
+    const void* owner = nullptr;
+    const void* consumer = nullptr;
+    uint64_t generation = 0;
+    uint64_t application = 0; // render-seam token, never a display counter
+    bool applicationKnown = false;
+
+    bool Known() const { return consumer != nullptr && generation != 0; }
+    bool SameConsumer(const FinishedIdentity& other) const
+    {
+        return Known() && other.Known() && consumer == other.consumer && generation == other.generation;
+    }
+};
+
 enum class FinishedConsumer : unsigned
 {
     Generic = 0,

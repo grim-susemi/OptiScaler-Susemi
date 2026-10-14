@@ -518,7 +518,9 @@ void MfgUnlock::TryApply(HMODULE requestedModule)
             g_status.SnippetVersion = ModuleVersion(module);
 
             wchar_t modulePath[MAX_PATH] {};
-            GetModuleFileNameW(module, modulePath, MAX_PATH);
+            const auto pathLength = GetModuleFileNameW(module, modulePath, MAX_PATH);
+            if (pathLength && pathLength < MAX_PATH)
+                g_status.ModulePath.assign(modulePath, pathLength);
             LOG_INFO("MFG unlock: DLSS-G provider {} at {}", g_status.SnippetVersion, wstring_to_string(modulePath));
 
             // Validate both gates before touching either. Ambiguous/unknown versions remain unmodified.

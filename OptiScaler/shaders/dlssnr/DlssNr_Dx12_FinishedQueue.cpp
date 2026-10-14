@@ -14,6 +14,13 @@ auto DlssNr_Dx12::State::FinishedPictureResetCommandList(ID3D12CommandList* cmd)
     ID3D12CommandList* real = nullptr;
     const bool proxied = Util::CheckForRealObject(__FUNCTION__, cmd, (IUnknown**)&real);
     auto* identity = proxied ? real : cmd;
+    if (outputCommands && outputCommands == identity)
+    {
+        outputCommands = nullptr;
+        outputStatus.state = DlssNr::OutputState::Skipped;
+        outputStatus.reason = DlssNr::OutputReason::Discarded;
+        Publish();
+    }
     if (enlarger && !enlarger->submitted && enlarger->creation == identity)
     {
         enlarger->failed = true;
@@ -155,6 +162,22 @@ auto DlssNr_Dx12::State::FinishedPictureSubmitted(DlssNr::LatePromiseBatch& batc
         gpuTime->Submitted(queue, count, lists);
     if (ngxTime)
         ngxTime->Submitted(queue, count, lists);
+    if (outputCommands)
+        for (UINT i = 0; i < count; ++i)
+        {
+            ID3D12CommandList* real = nullptr;
+            auto* identity = Util::CheckForRealObject(__FUNCTION__, lists[i], (IUnknown**) &real) ? real : lists[i];
+            if (identity != outputCommands)
+                continue;
+            outputCommands = nullptr;
+            outputStatus.executed = true;
+            outputStatus.submitted = true;
+            if (outputStatus.composed && outputStatus.copyBack && !outputStatus.hidden &&
+                outputStatus.state != DlssNr::OutputState::Failed)
+                outputStatus.state = DlssNr::OutputState::Submitted;
+            Publish();
+            break;
+        }
     if (!late.tracking.load())
         return;
     ID3D12CommandQueue* realQueue = nullptr;
@@ -184,8 +207,14 @@ auto DlssNr_Dx12::State::FinishedPictureSubmitted(DlssNr::LatePromiseBatch& batc
             // The copy executed but no signal will ever prove completion. Pin the slot:
             // unknown abandonment is pinned and logged, never released.
             slot.pinned = true;
+            outputStatus.state = DlssNr::OutputState::Failed;
+            outputStatus.reason = DlssNr::OutputReason::Signal;
+            outputStatus.executed = true;
+            outputStatus.submitted = false;
+            outputStatus.completionUnknown = true;
             LOG_DEBUG("NR late slot {} pinned (producer signal failed)", slot.serial);
             late.Say("The graphics queue stopped. Restart the game to retry.");
+            Publish();
         }
     }
 }

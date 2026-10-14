@@ -37,6 +37,11 @@ struct GpuLifetime::Impl
         ID3D12CommandList* commands = nullptr; // identity only, never dereferenced
         std::atomic_bool open { true };
         bool signalFailed = false;
+        std::vector<std::shared_ptr<CaptureCompletion>> captures;
+        void CloseCaptures()
+        {
+            for (const auto& capture : captures) capture->Close();
+        }
         // Only the latest value on each queue is needed, including when the list is replayed.
         std::map<std::shared_ptr<Timeline>, UINT64> completions;
         bool Complete() const { return !open && Finished(); }
@@ -71,7 +76,11 @@ struct GpuLifetime::Impl
             const auto remaining = --references;
             if (!remaining)
             {
-                if (auto use = recording.lock()) use->open = false;
+                if (auto use = recording.lock())
+                {
+                    use->open = false;
+                    use->CloseCaptures();
+                }
                 delete this;
             }
             return remaining;
@@ -185,12 +194,84 @@ void GpuLifetime::Submitted(ID3D12CommandQueue* queue, UINT count, ID3D12Command
     }
     Collect();
 }
+std::shared_ptr<CaptureCompletion> GpuLifetime::SubscribeCapture(ID3D12GraphicsCommandList* commands)
+{
+    std::lock_guard lock(impl->mutex);
+    commands = Identity(commands);
+    for (const auto& use : impl->recordings)
+        if (use->open && use->commands == commands)
+        {
+            auto capture = std::make_shared<CaptureCompletion>();
+            if (!capture->event) return {};
+            Microsoft::WRL::ComPtr<ID3D12Device> device;
+            capture->failed = !commands || FAILED(commands->GetDevice(IID_PPV_ARGS(&device))) ||
+                FAILED(device.As(&capture->deviceIdentity));
+            use->captures.push_back(capture);
+            return capture;
+        }
+    return {};
+}
+std::function<void()> GpuLifetime::PrepareCapture(ID3D12CommandQueue* queue, UINT count,
+                                                 ID3D12CommandList* const* lists)
+{
+    std::lock_guard lock(impl->mutex);
+    queue = Identity(queue);
+    std::vector<std::pair<std::shared_ptr<CaptureCompletion>, std::shared_ptr<CaptureCompletion::Point>>> points;
+    for (const auto& use : impl->recordings)
+    {
+        if (!use->open) continue;
+        bool matched = false;
+        for (UINT i = 0; i < count; ++i) matched |= use->commands == Identity(lists[i]);
+        if (!matched) continue;
+        for (const auto& capture : use->captures)
+        {
+            std::lock_guard captureLock(capture->mutex);
+            if (capture->count == capture->points.size())
+            {
+                capture->failed = true;
+                SetEvent(capture->event);
+                continue;
+            }
+            auto point = std::make_shared<CaptureCompletion::Point>();
+            point->queue = queue;
+            Microsoft::WRL::ComPtr<ID3D12Device> device;
+            Microsoft::WRL::ComPtr<IUnknown> deviceIdentity;
+            const bool originEstablished = queue && SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))) &&
+                SUCCEEDED(device.As(&deviceIdentity)) && capture->deviceIdentity &&
+                deviceIdentity.Get() == capture->deviceIdentity.Get();
+            if (!originEstablished) capture->failed = true;
+            point->failed = !originEstablished ||
+                FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&point->fence))) ||
+                FAILED(point->fence->SetEventOnCompletion(1, capture->event));
+            capture->points[capture->count++] = point;
+            points.emplace_back(capture, point);
+        }
+    }
+    if (points.empty()) return {};
+    return [points = std::move(points)]() mutable
+    {
+        for (const auto& [capture, point] : points)
+        {
+            std::lock_guard lock(capture->mutex);
+            if (point->resolved) continue;
+            point->failed |= !point->fence || !point->queue ||
+                FAILED(point->queue->Signal(point->fence.Get(), 1));
+            point->resolved = true;
+            SetEvent(capture->event);
+        }
+        points.clear();
+    };
+}
 void GpuLifetime::ResetRecording(ID3D12CommandList* commands)
 {
     std::lock_guard lock(impl->mutex);
     commands = Identity(commands);
     for (auto& use : impl->recordings)
-        if (use->commands == commands) use->open = false;
+        if (use->commands == commands)
+        {
+            use->open = false;
+            use->CloseCaptures();
+        }
     Collect();
 }
 void GpuLifetime::Retire(std::function<void()> destroy)
@@ -243,7 +324,10 @@ void GpuLifetime::FinishSubmitted()
     std::lock_guard lock(impl->mutex);
     for (auto& use : impl->recordings)
         if (!use->completions.empty() && use->Finished())
+        {
             use->open = false;
+            use->CloseCaptures();
+        }
     Collect();
 }
 }

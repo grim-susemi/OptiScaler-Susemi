@@ -62,6 +62,9 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     if (!NeuralRendering && Config::Instance()->DlssNrEnabled.value_or_default())
         NeuralRendering = std::make_unique<DlssNr_Dx12>("Neural Rendering", Device);
 
+    // Resolve the registered application's buffer-set identity before taking NR locks.
+    const auto nrConsumer = State::Instance().currentFeature == this
+                                ? DlssNr::CaptureFinishedConsumer() : DlssNr::StreamlinePicture::ConsumerSnapshot {};
     // Hold the inputs shared by NR and SR, not just NR's colour. Restore temporary
     // jitter/exposure/reset parameters even when evaluation exits early.
     const auto holdStates = DlssNr::ResolveInputStates_Dx12(interop);
@@ -125,7 +128,8 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     const bool rayReconstruction = sourceRayReconstruction || upscaler == Upscaler::DLSSD;
     // Specialized schedules own the two seams but keep the same per-feature shader/history lifetime.
     const bool specializedNr = NeuralRendering && NeuralRendering->ProcessSeam(
-        InCommandList, InParameters, true, timingQueue, rayReconstruction, submissionEpoch, interop, GetFeatureFlags());
+        InCommandList, InParameters, true, timingQueue, rayReconstruction, submissionEpoch, interop, GetFeatureFlags(),
+        nrConsumer);
     const bool nrBeforeUpscale = NeuralRendering && !specializedNr &&
                                  Config::Instance()->DlssNrEnabled.value_or_default() &&
                                  Config::Instance()->DlssNrRunBeforeSr.value_or_default() &&
@@ -274,7 +278,7 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
                              SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Output, output);
                              NeuralRendering->ProcessSeam(InCommandList, InParameters, false, timingQueue,
                                                           rayReconstruction, submissionEpoch, interop,
-                                                          GetFeatureFlags());
+                                                          GetFeatureFlags(), nrConsumer);
                              SetUpscalerResource_Dx12(InParameters, NVSDK_NGX_Parameter_Output, previousOutput);
                              return true;
                          } });

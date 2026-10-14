@@ -40,6 +40,31 @@ inline uint32_t DlssNrSpatialTransfer(uint32_t transfer)
     return DlssNrUsesDlssEnlargement(transfer) ? transfer - 1 : std::min(transfer, 3u);
 }
 
+struct DlssNrReconstruction
+{
+    uint32_t requested = 0;
+    uint32_t effective = 0;
+    bool privateEnlargement = false;
+    bool compatibilityFallback = false;
+};
+
+// Resolve the actual frame, not the configured placement. Keep intent for a later post frame.
+inline DlssNrReconstruction DlssNrResolveReconstruction(uint32_t requested, bool beforeUpscale,
+                                                        bool reduced, float workScale)
+{
+    const bool eligible = DlssNrUsesDlssEnlargement(requested) && reduced &&
+                          (requested == 2 || workScale < 1.0f);
+    return { requested, eligible && !beforeUpscale ? requested : DlssNrSpatialTransfer(requested),
+             eligible && !beforeUpscale, eligible && beforeUpscale };
+}
+
+// The same production gate drives the runtime and shipped-shader regression fixture.
+template <typename Enlarge, typename Compose>
+bool DlssNrComposeReconstruction(const DlssNrReconstruction& reconstruction, Enlarge enlarge, Compose compose)
+{
+    return (!reconstruction.privateEnlargement || enlarge()) && compose();
+}
+
 // Finished-colour shader's exposure-normalised brightness response, -12..12 stops.
 constexpr uint32_t kDlssNrHdrCurveBins = 48;
 
@@ -241,10 +266,15 @@ struct alignas(256) DlssNrConstants
     uint32_t ExposureSourceHeight;
     uint32_t ExposurePadding;
     float ExposureAnchors[16]; // Eight float2 pairs, packed as four float4s in HLSL.
+    uint32_t InputFilter;
+    uint32_t SignalEncoding; // Local paired HDR proxy code; unsupported contexts retain zero.
 };
 static_assert(sizeof(DlssNrConstants) == 256);
+static_assert(alignof(DlssNrConstants) == 256);
 static_assert(offsetof(DlssNrConstants, ReplaceDetailStrength) == 132);
 static_assert(offsetof(DlssNrConstants, ExposureAnchors) == 176);
+static_assert(offsetof(DlssNrConstants, InputFilter) == 240);
+static_assert(offsetof(DlssNrConstants, SignalEncoding) == 244);
 
 // Local mode numbering for dlssnr_residual.hlsl (a separate blob / PSO from the DlssNrMode shader).
 enum DlssNrResidualMode : uint32_t
@@ -256,6 +286,25 @@ enum DlssNrResidualMode : uint32_t
 class DlssNr_Common
 {
   public:
+    static bool SetSignalEncoding(DlssNrConstants& constants, uint32_t requested,
+                                  bool nativeDx12, bool linearHdr)
+    {
+        const bool supported = nativeDx12 && linearHdr;
+        constants.SignalEncoding = supported ? requested : 0u;
+        return supported;
+    }
+
+    // Native DX12 shrink only. Bridges and shared Vulkan callers retain zero.
+    static bool SetInputFilter(DlssNrConstants& down, uint32_t sourceWidth, uint32_t sourceHeight,
+                               uint32_t requested, bool nativeDx12)
+    {
+        const bool supported = nativeDx12 && sourceWidth && sourceHeight && down.Width && down.Height &&
+            down.Width <= sourceWidth && down.Height <= sourceHeight &&
+            (down.Width < sourceWidth || down.Height < sourceHeight);
+        down.InputFilter = supported ? requested : 0u;
+        return supported;
+    }
+
     // Keep the controls consumed by the shared shader identical across graphics APIs.
     template <typename ConfigType>
     static DlssNrConstants MakeConstants(DlssNrMode mode, uint32_t width, uint32_t height, float whitePoint,

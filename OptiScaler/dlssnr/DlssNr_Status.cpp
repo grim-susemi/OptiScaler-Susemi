@@ -17,13 +17,26 @@ struct PublishedStatus
 std::mutex statusMutex;
 std::array<PublishedStatus, 2> published;
 ControlRequests requests;
+thread_local const MenuStatusScope* menuSnapshot = nullptr;
 } // namespace
 
 StatusSnapshot ReadStatus(Backend backend)
 {
+    if (menuSnapshot)
+        return backend == Backend::Dx12 ? menuSnapshot->dx12 : menuSnapshot->vulkan;
     std::lock_guard lock(statusMutex);
     return published[static_cast<size_t>(backend)].value;
 }
+
+MenuStatusScope::MenuStatusScope()
+{
+    std::lock_guard lock(statusMutex);
+    dx12 = published[static_cast<size_t>(Backend::Dx12)].value;
+    vulkan = published[static_cast<size_t>(Backend::Vulkan)].value;
+    menuSnapshot = this;
+}
+
+MenuStatusScope::~MenuStatusScope() { menuSnapshot = nullptr; }
 
 void PublishStatus(const void* owner, Backend backend, const StatusSnapshot& status)
 {

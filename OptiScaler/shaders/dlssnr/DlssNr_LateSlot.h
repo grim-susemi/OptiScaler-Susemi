@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 // ============================================================================
 // DlssNr_LateSlot.h - the finished-picture late slot lifecycle (pure, testable).
 //
@@ -159,6 +160,7 @@ struct LatePromiseEntry
     uint64_t token = 0;             // the promised watermark value
     const void* queue = nullptr;    // normalized queue identity of this call
     const void* producer = nullptr; // normalized producer list identity
+    std::function<void()> captureSubmitted;
 };
 
 // The per-call batch: built before the real ExecuteCommandLists and consumed by the

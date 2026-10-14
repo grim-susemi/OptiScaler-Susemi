@@ -44,7 +44,34 @@ void DlssNr_Dx12::State::EvaluateInternal(ID3D12GraphicsCommandList* cmd, NVSDK_
         {
             deferredSr.Cancel();
             if (beforeUpscale)
-                late.Capture(cmd, params, rayReconstruction); // gated per pool in Capture
+            {
+                outputStatus.ResetOutcome();
+                outputStatus.state = DlssNr::OutputState::Capturing;
+                outputStatus.requested = outputStatus.effective = placement;
+                outputStatus.consumer = DlssNr::CurrentFinishedConsumer();
+                // Native tokens advance only at the application reconstruction seam.
+                if (!late.consumer.applicationKnown)
+                {
+                    late.consumer.application = seamClock.AtSeam(true, interop, interop ? submissionEpoch : 0);
+                    late.consumer.applicationKnown = true;
+                }
+                late.Capture(cmd, params, rayReconstruction, interop);
+                outputStatus.application = late.consumer.application;
+                outputStatus.generation = late.consumer.generation;
+                for (const auto& slot : late.slots)
+                    if (slot.pending && slot.identity.SameConsumer(late.consumer) &&
+                        slot.identity.application == late.consumer.application &&
+                        slot.serial > outputStatus.captureSerial)
+                    {
+                        outputStatus.captureSerial = slot.serial;
+                        outputStatus.guidesValid = slot.guidesValid;
+                    }
+                if (!outputStatus.guidesValid)
+                {
+                    outputStatus.state = DlssNr::OutputState::Skipped;
+                    outputStatus.reason = DlssNr::OutputReason::Admission;
+                }
+            }
             return;
         }
     }

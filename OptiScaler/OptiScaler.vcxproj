@@ -306,6 +306,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemDefinitionGroup>
   <PropertyGroup>
     <OptiScalerRtx40Mfg Condition="'$(OptiScalerRtx40Mfg)'==''">false</OptiScalerRtx40Mfg>
+    <OptiScalerNrSelfTest Condition="'$(OptiScalerNrSelfTest)'==''">false</OptiScalerNrSelfTest>
   </PropertyGroup>
   <PropertyGroup Condition="'$(OptiScalerRtx40Mfg)'=='true'">
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)-RTX40-MFG\</OutDir>
@@ -316,6 +317,45 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
       <PreprocessorDefinitions>OPTISCALER_RTX40_MFG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
+  <PropertyGroup Condition="'$(OptiScalerNrSelfTest)'=='true'">
+    <ConfigurationType>Application</ConfigurationType>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <TargetName>NRAddonHost</TargetName>
+    <TargetExt>.exe</TargetExt>
+    <OutDir>$(SolutionDir)$(Platform)\NRAddonHost-$(Configuration)-RTX40-MFG\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\NRAddonHost-$(Configuration)-RTX40-MFG\</IntDir>
+    <PreBuildEventUseInBuild>false</PreBuildEventUseInBuild>
+    <PostBuildEventUseInBuild>false</PostBuildEventUseInBuild>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(OptiScalerNrSelfTest)'=='true'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>NDEBUG;_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR;_CONSOLE;UNICODE;_UNICODE;OPTISCALER_NR_SELF_TEST;OPTISCALER_RTX40_MFG</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(SolutionDir)tests\nr_addon_host\services;$(OptiScalerNrDependencyRoot)\spdlog\include;$(OptiScalerNrDependencyRoot)\unordered_dense\include;$(OptiScalerNrDependencyRoot)\vulkan\include;$(OptiScalerNrDependencyRoot)\simpleini;$(OptiScalerNrDependencyRoot)\xess\inc\xess;$(OptiScalerNrDependencyRoot)\xess\inc\xell;$(OptiScalerNrDependencyRoot)\xess\inc\xess_fg;$(OptiScalerNrDependencyRoot)\FidelityFX-SDK\ffx-api\include\ffx_api;$(OptiScalerNrDependencyRoot)\magic_enum\include\magic_enum;$(OptiScalerNrDependencyRoot)\nvapi;$(ProjectDir)include\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <AdditionalOptions>/sourceDependencies "$(IntDir)%(Filename).inputs.json" %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <LinkDLL>false</LinkDLL>
+      <ModuleDefinitionFile></ModuleDefinitionFile>
+      <AdditionalDependencies>d3d11.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;freetype.lib;detours.lib;ffx_fsr2_api_x64.lib;ffx_fsr2_api_dx12_x64.lib;user32.lib;gdi32.lib;shell32.lib;imm32.lib;dwmapi.lib;bcrypt.lib;psapi.lib;version.lib;winhttp.lib;Dbghelp.lib;WindowsApp.lib</AdditionalDependencies>
+      <OptimizeReferences>true</OptimizeReferences>
+      <IgnoreSpecificDefaultLibraries>LIBCMT</IgnoreSpecificDefaultLibraries>
+      <DelayLoadDLLs></DelayLoadDLLs>
+      <AdditionalOptions>/VERBOSE:LIB</AdditionalOptions>
+    </Link>
+    <PreBuildEvent><Command></Command></PreBuildEvent>
+    <PostBuildEvent><Command></Command></PostBuildEvent>
+  </ItemDefinitionGroup>
+  <Target Name="ValidateNrSelfTestFlag" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(OptiScalerNrSelfTest)'!='true' and '$(OptiScalerNrSelfTest)'!='false'"
+           Text="OptiScalerNrSelfTest must be true or false." />
+    <Error Condition="'$(OptiScalerNrSelfTest)'=='true' and ('$(Platform)'!='x64' or '$(Configuration)'!='Release' or '$(OptiScalerRtx40Mfg)'!='true')"
+           Text="Early NRAddonHost requires Release x64 and OptiScalerRtx40Mfg=true." />
+  </Target>
   <Target Name="ValidateRtx40MfgFlag" BeforeTargets="PrepareForBuild">
     <Error Condition="'$(OptiScalerRtx40Mfg)'!='true' and '$(OptiScalerRtx40Mfg)'!='false'"
            Text="OptiScalerRtx40Mfg must be true or false." />
@@ -1001,5 +1041,30 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Evaluate.cpp" />
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Encode.cpp" />
     <ClInclude Include="shaders\dlssnr\DlssNr_Dx12_ModelState.h" />
+  </ItemGroup>
+  <!-- The application links the production NR implementation with owned host startup services. -->
+  <ItemGroup Condition="'$(OptiScalerNrSelfTest)'=='true'">
+    <ClCompile Remove="@(ClCompile)" />
+    <ResourceCompile Remove="@(ResourceCompile)" />
+    <ClCompile Include="dlssnr\DlssNr_Menu.cpp;dlssnr\DlssNr_MenuControls.cpp;dlssnr\DlssNr_Status.cpp;menu\Localization.cpp" />
+    <ClCompile Include="menu\menu_common.cpp;menu\input\input_system.cpp;dlssnr\DlssNr_MenuOverlay.cpp;version_check.cpp;framegen\dlssg\AmpereMfgLoader.cpp" />
+    <ClCompile Include="BuildInfo.cpp">
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(OutDir)..\..\m</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="OptiTypes.cpp;shaders\hud_copy\HudCopy_Dx12.cpp" />
+    <ClCompile Include="include\imgui\imgui.cpp;include\imgui\imgui_draw.cpp;include\imgui\imgui_tables.cpp;include\imgui\imgui_widgets.cpp;include\imgui\imgui_impl_win32.cpp;include\imgui\imgui_impl_dx11.cpp;include\imgui\misc\freetype\imgui_freetype.cpp" />
+    <ClCompile Include="..\tests\nr_addon_host\Main.cpp;..\tests\nr_addon_host\UiServices.cpp;..\tests\nr_addon_host\UiContracts.cpp" />
+    <ClCompile Include="..\tests\nr_addon_host\RuntimeContracts.cpp;..\tests\nr_addon_host\RuntimeDriver.cpp;..\tests\nr_addon_host\RuntimeGpu.cpp" />
+    <ClCompile Include="dlssnr\DlssNr_Proxy.cpp;dlssnr\DlssNr_GpuLifetime.cpp;dlssnr\DlssNr_CompatibilityRuntime.cpp;dlssnr\DlssNr_CompatibilityRuntimePaths.cpp;dlssnr\DlssNr_NgxDiagnostics.cpp;dlssnr\DlssNr_Pipeline_Dx12.cpp;dlssnr\DlssNr_StreamlinePicture.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNr_Dx12.cpp;shaders\dlssnr\DlssNr_Dx12_Resources.cpp;shaders\dlssnr\DlssNr_Dx12_Models.cpp;shaders\dlssnr\DlssNr_Dx12_Encode.cpp;shaders\dlssnr\DlssNr_Dx12_Run.cpp;shaders\dlssnr\DlssNr_Dx12_Evaluate.cpp;shaders\dlssnr\DlssNr_Dx12_Late.cpp;shaders\dlssnr\DlssNr_Dx12_FinishedQueue.cpp;shaders\dlssnr\DlssNr_Dx12_FinishedCompose.cpp;shaders\dlssnr\DlssNr_Dx12_Enlarge.cpp;shaders\dlssnr\DlssNr_Dx12_DeferredSr.cpp;shaders\dlssnr\DlssNr_Dx12_Hold.cpp;shaders\dlssnr\DlssNr_Dx12_Status.cpp;shaders\dlssnr\DlssNr_Upscaler_Dx12.cpp" />
+    <ClCompile Include="resource_tracking\ResTrack_dx12.cpp;shaders\Shader_Dx12.cpp;shaders\output_scaling\OS_Dx12.cpp;gpu_time\GpuTime_Dx12.cpp;Util.cpp;Logger.cpp" />
+    <ClCompile Include="framegen\dlssg\MfgUnlock.cpp" />
+    <ClCompile Include="framegen\IFGFeature.cpp;hooks\D3D12_Hooks.cpp;hudfix\Hudfix_Dx12.cpp;menu\menu_overlay_dx.cpp;shaders\Shader_Common.cpp;misc\SkipSpoof.cpp;scanner\scanner.cpp;misc\IdentifyGpu.cpp" />
+    <ClCompile Include="..\tests\nr_addon_host\GameStartupGuards.cpp;framegen\IFGFeature_Dx12.cpp;shaders\format_transfer\FT_Dx12.cpp;include\imgui\imgui_impl_dx12.cpp;include\device_info\device_info.cpp;nvapi\NvApiTypes.cpp" />
+    <ClCompile Include="shaders\resource_flip\RF_Dx12.cpp" />
+    <ClCompile Update="include\imgui\imgui_impl_win32.cpp">
+      <PreprocessorDefinitions>IMGUI_IMPL_WIN32_DISABLE_GAMEPAD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClInclude Include="..\tests\nr_addon_host\UiServices.h" />
   </ItemGroup>
 </Project>

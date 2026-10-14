@@ -42,6 +42,8 @@ cbuffer Params : register(b0)
     float gPreExposure, gExposureTrim, gExposureProtection;
     uint gExposureAnchorCount, gExposureSourceWidth, gExposureSourceHeight, gExposurePadding;
     float4 gExposureAnchors[4];
+    uint gInputFilter;
+    uint gSignalEncoding; // Prepared local HDR proxy code, shared by encode and interpretation.
 };
 
 // Hue-preserving gamut compression toward the D65 neutral axis.
@@ -279,6 +281,16 @@ float3 SrgbToLinear(float3 v)
 }
 
 // The edit at an arbitrary position, exactly as the resolve computes its own.
+#include "dlssnr_signal.hlsli"
+
+float3 DecodeSignal(float3 code)
+{
+    // Keep the original vector arithmetic on the Legacy path.
+    if (gSignalEncoding == 0)
+        return gPassthrough != 0 ? code : SrgbToLinear(code);
+    return NrSignalDecodeRgb(code, gSignalEncoding, gPassthrough != 0);
+}
+
 float3 EditAt(float2 uvq)
 {
     float3 p = gSource.SampleLevel(gLinear, uvq, 0).rgb;
@@ -286,8 +298,8 @@ float3 EditAt(float2 uvq)
 
     if (gPassthrough == 0)
     {
-        p = SrgbToLinear(p);
-        m = SrgbToLinear(m);
+        p = DecodeSignal(p);
+        m = DecodeSignal(m);
     }
 
     return m - p;
@@ -611,7 +623,7 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     {
         float3 source = gSource.Load(int3(id.xy, 0)).rgb;
         float3 answer = gModel.Load(int3(id.xy, 0)).rgb;
-        if (gPassthrough == 0) { source = SrgbToLinear(source); answer = SrgbToLinear(answer); }
+        if (gPassthrough == 0) { source = DecodeSignal(source); answer = DecodeSignal(answer); }
         float3 d = SanitizeFinite3(answer - source, 0.0);
         gTarget[id.xy] = float4(0.5 + 0.5 * d / (1.0 / 64.0 + abs(d)), 1.0);
         return;
@@ -657,7 +669,9 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     {
         // Already encoded: restore the input range without applying the tone curve again.
         float4 raw = gSource.Load(int3(id.xy, 0));
-        gTarget[id.xy] = float4(saturate(SanitizeFinite3(raw.rgb, 0.5)), raw.a);
+        float3 bounded = gSignalEncoding == 0 ? saturate(SanitizeFinite3(raw.rgb, 0.5))
+            : float3(NrSignalBound(raw.r), NrSignalBound(raw.g), NrSignalBound(raw.b));
+        gTarget[id.xy] = float4(bounded, raw.a);
         return;
     }
 
@@ -671,6 +685,33 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         {
             gTarget[id.xy] = gSource.Load(int3(id.xy, 0));
             return;
+        }
+
+        // Overrides affect only genuine integer minification, never the legacy enlarge fallback.
+        if (srcW != 0 && srcH != 0 && gWidth != 0 && gHeight != 0 &&
+            gWidth <= srcW && gHeight <= srcH && (gWidth < srcW || gHeight < srcH))
+        {
+            const float2 uv = (float2(id.xy) + 0.5) / float2(gWidth, gHeight);
+            if (gInputFilter == 1)
+            {
+                const float2 position = clamp(uv * float2(srcW, srcH) - 0.5,
+                                               0.0, float2(srcW - 1, srcH - 1));
+                const int2 lo = int2(floor(position));
+                const int2 hi = min(lo + 1, int2(srcW - 1, srcH - 1));
+                const float2 fraction = position - float2(lo);
+                gTarget[id.xy] = lerp(
+                    lerp(gSource.Load(int3(lo, 0)), gSource.Load(int3(hi.x, lo.y, 0)), fraction.x),
+                    lerp(gSource.Load(int3(lo.x, hi.y, 0)), gSource.Load(int3(hi, 0)), fraction.x),
+                    fraction.y);
+                return;
+            }
+            if (gInputFilter == 2)
+            {
+                const int2 centre = clamp(int2(floor(uv * float2(srcW, srcH))),
+                                          int2(0, 0), int2(srcW - 1, srcH - 1));
+                gTarget[id.xy] = gSource.Load(int3(centre, 0));
+                return;
+            }
         }
 
         // Exact area-weighted downsampling avoids the aliasing of a single bilinear tap.
@@ -757,7 +798,9 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         // alpha, so the default stays byte-identical.
         float alpha = gReversibleMode != 0 ? 1.0 : source.a;
 
-        gTarget[id.xy] = float4(LinearToSrgb(display), alpha);
+        float3 encoded = gSignalEncoding == 0 ? LinearToSrgb(display)
+            : NrSignalEncodeRgb(display, gSignalEncoding, false);
+        gTarget[id.xy] = float4(encoded, alpha);
         return;
     }
 
@@ -803,8 +846,8 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     float4 modelSample = gModel.SampleLevel(gLinear, cmpUv, 0);
 
     // Nothing was encoded on the way in, so nothing is decoded here either.
-    float3 proxy = gPassthrough != 0 ? proxySample.rgb : SrgbToLinear(proxySample.rgb);
-    float3 model = gPassthrough != 0 ? modelSample.rgb : SrgbToLinear(modelSample.rgb);
+    float3 proxy = DecodeSignal(proxySample.rgb);
+    float3 model = DecodeSignal(modelSample.rgb);
 
     // The model's own answer, kept before the matched-residual block below can rewrite `model`, so the
     // replace decode uses what the model returned rather than the residual reconstruction.
@@ -980,6 +1023,11 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
 
     // Back out of the normalised space the composition worked in.
     result *= normScale;
+
+    // Native composed zero edits retain headroom without FP32-to-FP16 boundary drift.
+    if (gSignalEncoding != 0 && gPassthrough == 0 && !modelRanSmall && gTransfer <= 1 &&
+        gReversibleMode != 2 && gReversibleMode != 4 && gColourStrength <= 1 && all(edit == 0))
+        result = originalSample.rgb;
 
     if (gSkinProtection != 0)
     {

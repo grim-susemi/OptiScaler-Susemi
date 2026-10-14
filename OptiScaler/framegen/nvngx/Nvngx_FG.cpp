@@ -13,6 +13,7 @@
 #include "Nvngx_Combo.h"
 #include <imgui/ImGuiNotify.hpp>
 #include <nvsdk_ngx_vk.h>
+#include <dlssnr/DlssNr_MfgObserverNgx.h>
 
 IFGNvngx* Nvngx_FG::getProvider()
 {
@@ -348,7 +349,7 @@ NVSDK_NGX_Result Nvngx_FG::D3D12_EvaluateFeature(ID3D12GraphicsCommandList* InCm
                           State::Instance().gameQuirks & GameQuirk::FSRFGHudlessMismatchFixup;
 
     uint32_t frameIndex = 1;
-    InParameters->Get("DLSSG.MultiFrameIndex", &frameIndex);
+    const auto indexReadResult = InParameters->Get("DLSSG.MultiFrameIndex", &frameIndex);
 
     if (applyHudCutoff && frameIndex == 1)
     {
@@ -395,8 +396,14 @@ NVSDK_NGX_Result Nvngx_FG::D3D12_EvaluateFeature(ID3D12GraphicsCommandList* InCm
 
     // LOG_TRACE("Handle received from the game: {:X}", (uint64_t) InFeatureHandle);
 
-    return provider->D3D12_EvaluateFeature(InCmdList, ((Nvngx_FG_Handle*) InFeatureHandle)->nativeHandle, InParameters,
-                                           InCallback);
+    const auto observation = DlssNr::MfgObserver::Ngx(
+        DlssNr::MfgObserver::Seam::NgxReplacement, DlssNr::MfgObserver::Value(provider),
+        ((Nvngx_FG_Handle*) InFeatureHandle)->nativeHandle, InParameters, InCmdList,
+        NVSDK_NGX_Feature_FrameGeneration, true, true, frameIndex, indexReadResult);
+    const auto result = provider->D3D12_EvaluateFeature(
+        InCmdList, ((Nvngx_FG_Handle*) InFeatureHandle)->nativeHandle, InParameters, InCallback);
+    DlssNr::MfgObserver::Complete(observation, result);
+    return result;
 }
 
 NVSDK_NGX_Result Nvngx_FG::D3D12_PopulateParameters_Impl(NVSDK_NGX_Parameter* InParameters)
@@ -597,7 +604,7 @@ NVSDK_NGX_Result Nvngx_FG::VULKAN_EvaluateFeature(VkCommandBuffer InCmdList, con
                           State::Instance().gameQuirks & GameQuirk::FSRFGHudlessMismatchFixup;
 
     uint32_t frameIndex = 1;
-    InParameters->Get("DLSSG.MultiFrameIndex", &frameIndex);
+    const auto indexReadResult = InParameters->Get("DLSSG.MultiFrameIndex", &frameIndex);
 
     if (applyHudCutoff && frameIndex == 1)
     {
@@ -636,7 +643,13 @@ NVSDK_NGX_Result Nvngx_FG::VULKAN_EvaluateFeature(VkCommandBuffer InCmdList, con
 
     // LOG_TRACE("Handle received from the game: {:X}", (uint64_t) InFeatureHandle);
 
-    return provider->VULKAN_EvaluateFeature(InCmdList, ourHandle->nativeHandle, InParameters, InCallback);
+    const auto observation = DlssNr::MfgObserver::Ngx(
+        DlssNr::MfgObserver::Seam::NgxReplacement, DlssNr::MfgObserver::Value(provider),
+        ourHandle->nativeHandle, InParameters, InCmdList, NVSDK_NGX_Feature_FrameGeneration,
+        true, true, frameIndex, indexReadResult, true);
+    const auto result = provider->VULKAN_EvaluateFeature(InCmdList, ourHandle->nativeHandle, InParameters, InCallback);
+    DlssNr::MfgObserver::Complete(observation, result);
+    return result;
 }
 
 NVSDK_NGX_Result Nvngx_FG::VULKAN_PopulateParameters_Impl(NVSDK_NGX_Parameter* InParameters)

@@ -1,12 +1,82 @@
 #include "pch.h"
 #include "DlssNr_Dx12_State.h"
+#include <dlssnr/DlssNr_StreamlinePicture.h>
+
+bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue,
+                                            const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts,
+                                            bool claim, uint64_t captureSerial)
+{
+    facts = {};
+    if (!color || !queue || !consumer.Known() || !late.device)
+        return false;
+    LateContext::ComPtr<ID3D12Device> queueDevice, pictureDevice;
+    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&queueDevice))) ||
+        FAILED(color->GetDevice(IID_PPV_ARGS(&pictureDevice))) ||
+        !DlssNr::StreamlinePicture::SameDevice(late.device.Get(), queueDevice.Get()) ||
+        !DlssNr::StreamlinePicture::SameDevice(late.device.Get(), pictureDevice.Get()))
+        return false;
+    ID3D12CommandQueue* realQueue = nullptr;
+    if (!Util::CheckForRealObject(__FUNCTION__, queue, (IUnknown**) &realQueue))
+        realQueue = queue;
+    LateContext::Slot* newest = nullptr;
+    for (auto& slot : late.slots)
+        if (slot.pending && !slot.residualOnly && slot.identity.owner == &shader &&
+            slot.identity.SameConsumer(consumer) &&
+            (!consumer.applicationKnown || (slot.identity.applicationKnown &&
+                                            slot.identity.application == consumer.application)) &&
+            (!newest || slot.serial > newest->serial))
+            newest = &slot;
+    if (!newest)
+        return false;
+    auto& slot = *newest;
+    const auto desc = color->GetDesc();
+    facts.exists = true;
+    facts.serial = slot.serial;
+    facts.identity = slot.identity;
+    facts.submitted = DlssNr::LateCaptureEnqueued(slot.submitted, slot.promisePending);
+    facts.sameQueue = facts.submitted && slot.producerQueue.Get() == realQueue;
+    facts.ready = DlssNr::LateCaptureSelectable(slot.pending, slot.pinned, slot.submitted, slot.promisePending) &&
+                  slot.guidesValid && slot.consumerOwner && slot.consumerDevice &&
+                  DlssNr::StreamlinePicture::SameDevice(late.device.Get(), slot.consumerDevice.Get()) &&
+                  slot.frame.OutputWidth == desc.Width && slot.frame.OutputHeight == desc.Height &&
+                  slot.fence && DlssNr::FinishedInputReady(facts.sameQueue, slot.fence->GetCompletedValue(), slot.ready);
+    if (!claim)
+        return true;
+    // Closing presentation eligibility never resolves producer/GPU ownership.
+    for (auto& other : late.slots)
+        if (other.pending && other.identity.SameConsumer(slot.identity) && other.serial <= slot.serial)
+            DlssNr::ClearLateSlotSelection(other.pending);
+    if (!facts.ready || (captureSerial && (captureSerial != slot.serial ||
+        consumer.owner != slot.identity.owner || consumer.application != slot.identity.application)) ||
+        (late.claimed.owner == slot.identity.owner && late.claimed.SameConsumer(slot.identity) &&
+         (slot.identity.application <= late.claimed.application || slot.serial <= late.claimedSerial)))
+        return false;
+    late.claimed = slot.identity;
+    late.claimedSerial = slot.serial;
+    return true;
+}
 
 auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE colorSpace,
-                                          bool gameFrameHandoff) -> bool
+                                          bool gameFrameHandoff, const DlssNr::FinishedIdentity& consumer,
+                                          uint64_t captureSerial) -> bool
 {
+    modelFacts.ValidateCurrent(DlssNr::Backend::Dx12, consumer);
+    outputStatus.ResetOutcome();
+    outputStatus.state = DlssNr::OutputState::Skipped;
+    outputStatus.reason = DlssNr::OutputReason::Admission;
+    outputStatus.application = consumer.applicationKnown ? consumer.application : 0;
+    outputStatus.generation = consumer.Known() ? consumer.generation : 0;
+    const auto& requested = *Config::Instance();
+    outputStatus.requested = DlssNr::ResolvePlacement(requested.DlssNrRunBeforeSr.value_or_default(),
+        requested.DlssNrDeferredDlss.value_or_default(), requested.DlssNrResidualAcrossRr.value_or_default(), true);
+    outputStatus.effective = outputStatus.requested;
+    outputStatus.consumer = DlssNr::CurrentFinishedConsumer();
+    outputStatus.hidden = !requested.DlssNrApplyModel.value_or_default();
+    outputCommands = nullptr;
     if (!Config::Instance()->DlssNrFinishedPicture.value_or_default() ||
         !Config::Instance()->DlssNrEnabled.value_or_default())
     {
+        outputStatus = {};
         late.Cancel();
         return false;
     }
@@ -38,6 +108,20 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     const bool residualOnly = DlssNr::ResolvePlacement(
         cfg.DlssNrRunBeforeSr.value_or_default(), cfg.DlssNrDeferredDlss.value_or_default(),
         cfg.DlssNrResidualAcrossRr.value_or_default(), true).deferred;
+    const bool legacyBridge = ::State::Instance().swapchainApi == API::DX11 ||
+                              ::State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
+    LateContext::Slot* latest = nullptr;
+    if (!residualOnly && !legacyBridge)
+    {
+        DlssNr::XeFGCapture facts;
+        if (!AdmitFinishedCapture(color, queue, consumer, facts, true, captureSerial))
+            return false;
+        for (auto& slot : late.slots)
+            if (slot.serial == facts.serial)
+                latest = &slot;
+    }
+    else
+    {
     for (auto& slot : late.slots)
     {
         // Candidate filter = picture identity only (pending + placement/extent). Eligibility
@@ -60,7 +144,6 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
                                                              slot.promisePending)))
             newest = &slot;
     }
-    LateContext::Slot* latest = nullptr;
     if (DlssNr::LateCompositionRefuses(selection))
         return false; // the newest capture exists but is unusable: refuse, never the held edit
     if (selection.have)
@@ -83,6 +166,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         auto& held = *late.heldSlot;
         if (late.Finished(held))
             latest = &held;
+    }
     }
     if (!latest)
         return false; // loading screen, another swapchain, or this real frame was already consumed
@@ -119,7 +203,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     }
     // Drop other submitted evaluates from this picture, not their in-flight resources.
     for (auto& other : late.slots)
-        if (other.submitted && other.serial <= slot.serial)
+        if (other.submitted && other.serial <= slot.serial &&
+            (residualOnly || legacyBridge || other.identity.SameConsumer(slot.identity)))
             other.pending = false;
     // The selected input is complete or ordered before composition on this queue.
     if (FAILED(slot.allocator->Reset()) ||
@@ -153,17 +238,25 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             Barrier(cmd, color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
         }
     }
-    const auto before = nr.successfulDispatches;
+    bool finalCopyBack = false;
     bool appliedResidual = false;
     bool matchedResponse = false;
     if (slot.residualOnly)
     {
+        // This packet carries the already evaluated pre-SR edit; Present only
+        // composes its residual and must not evaluate the model again.
+        outputStatus.evaluated = true;
         if (slot.encoded &&
             (slot.encoded->GetDesc().Width != desc.Width || slot.encoded->GetDesc().Height != desc.Height ||
              slot.encoded->GetDesc().Format != desc.Format))
             slot.encoded.Reset();
         if (!slot.encoded)
             slot.encoded.Attach(CreateScratch(late.device.Get(), desc.Format, (unsigned) desc.Width, desc.Height));
+        if (!slot.encoded)
+        {
+            outputStatus.state = DlssNr::OutputState::Failed;
+            outputStatus.reason = DlssNr::OutputReason::Resource;
+        }
         if (slot.encoded && Config::Instance()->DlssNrApplyModel.value_or_default())
         {
             Barrier(cmd, slot.residual.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
@@ -238,13 +331,18 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
                 Barrier(cmd, slot.cleanScene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                         D3D12_RESOURCE_STATE_COPY_DEST);
             if (!appliedResidual)
+            {
                 slot.responseValid = false;
+                outputStatus.state = DlssNr::OutputState::Failed;
+                outputStatus.reason = DlssNr::OutputReason::Composition;
+            }
             if (appliedResidual)
             {
                 Barrier(cmd, slot.encoded.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                         D3D12_RESOURCE_STATE_COPY_SOURCE);
                 Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
                 cmd->CopyResource(color, slot.encoded.Get());
+                finalCopyBack = true;
                 Barrier(cmd, color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 Barrier(cmd, slot.encoded.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -261,7 +359,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         // Absolute display encodings: 203-nit reference white, in 80-nit scRGB units.
         frame.WhitePointOverride = (pq || scrgb) ? 203.0f / 80.0f : 0.0f;
         frame.Reset |= late.reset;
-        frame.SubmissionEpoch = epoch;
+        frame.SubmissionEpoch = legacyBridge ? epoch : slot.identity.application;
         Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
@@ -298,7 +396,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         }
         if (colorReady)
             Run(cmd, nrColor, slot.depth.Get(), slot.motion.Get(), nrColor, frame, queue);
-        if (pq && colorReady && nr.successfulDispatches > before &&
+        finalCopyBack = !pq && outputStatus.composed && outputStatus.copyBack;
+        if (pq && colorReady && outputStatus.composed && outputStatus.copyBack &&
             Config::Instance()->DlssNrApplyModel.value_or_default())
         {
             conversion.Mode = 1;
@@ -313,6 +412,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
                 Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                         D3D12_RESOURCE_STATE_COPY_DEST);
                 cmd->CopyResource(color, slot.encoded.Get());
+                finalCopyBack = true;
                 Barrier(cmd, color, D3D12_RESOURCE_STATE_COPY_DEST,
                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 Barrier(cmd, slot.encoded.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
@@ -321,12 +421,31 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PRESENT);
             Barrier(cmd, slot.linear.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            if (!finalCopyBack)
+            {
+                outputStatus.state = DlssNr::OutputState::Failed;
+                outputStatus.reason = DlssNr::OutputReason::FinalEncode;
+            }
+        }
+        if (!colorReady)
+        {
+            outputStatus.state = DlssNr::OutputState::Failed;
+            outputStatus.reason = DlssNr::OutputReason::FinalEncode;
         }
         Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_RESOURCE_STATE_COPY_DEST);
         Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                 D3D12_RESOURCE_STATE_COPY_DEST);
     }
+    outputStatus.application = slot.identity.application;
+    outputStatus.generation = slot.identity.generation;
+    outputStatus.captureSerial = slot.serial;
+    outputStatus.consumer = DlssNr::CurrentFinishedConsumer();
+    outputStatus.guidesValid = slot.guidesValid;
+    outputStatus.hidden = !Config::Instance()->DlssNrApplyModel.value_or_default();
+    outputStatus.copyBack = finalCopyBack;
+    outputStatus.composed = slot.residualOnly ? appliedResidual : outputStatus.composed;
+    outputCommands = nullptr; // this owned list is submitted below, not by the producer hook
     if (FAILED(cmd->Close()))
     {
         late.heldFailed |= holdFinished;
@@ -335,11 +454,14 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         // re-issue a watermark whose signal is already queued. Pin the slot instead: it is
         // never reused, and nothing about the promise changes (DlssNr_LateSlot.h).
         slot.pinned = true;
+        outputStatus.state = DlssNr::OutputState::Failed;
+        outputStatus.reason = DlssNr::OutputReason::Close;
         LOG_DEBUG("NR late slot {} pinned (composition close failed)", slot.serial);
         return false;
     }
     ID3D12CommandList* lists[] = { cmd };
     queue->ExecuteCommandLists(1, lists);
+    outputStatus.executed = true;
     // Monotonic allocation: the composition signal is a fresh value above every watermark
     // this slot has ever carried, so a later arm can never be satisfied by an older signal.
     slot.ready = (slot.ready > slot.done ? slot.ready : slot.done) + 1;
@@ -347,11 +469,15 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     if (FAILED(queue->Signal(slot.fence.Get(), slot.ready)))
     {
         slot.pinned = true;
+        outputStatus.state = DlssNr::OutputState::Failed;
+        outputStatus.reason = DlssNr::OutputReason::Signal;
+        outputStatus.completionUnknown = true;
         LOG_DEBUG("NR late slot {} pinned (composition signal failed)", slot.serial);
         late.heldFailed |= holdFinished;
         late.Say("The graphics queue stopped. Restart the game to retry.");
         return false;
     }
+    outputStatus.submitted = true;
     if (holdFinished)
     {
         late.heldFence = slot.fence;
@@ -360,9 +486,25 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         late.heldSlot = &slot;
         late.heldSlotSerial = slot.serial;
     }
-    const bool ran = slot.residualOnly ? appliedResidual : nr.successfulDispatches > before;
-    late.reset = !ran;
-    late.Say(!Config::Instance()->DlssNrApplyModel.value_or_default() ? "NR changes are hidden."
+    const bool ran = finalCopyBack && !outputStatus.hidden &&
+                     outputStatus.state != DlssNr::OutputState::Failed;
+    if (ran)
+    {
+        outputStatus.state = DlssNr::OutputState::Submitted;
+        outputStatus.reason = DlssNr::OutputReason::None;
+    }
+    else if (outputStatus.hidden && (outputStatus.evaluated || slot.residualOnly) &&
+             outputStatus.state != DlssNr::OutputState::Failed)
+    {
+        outputStatus.state = DlssNr::OutputState::EvaluatedHidden;
+        outputStatus.reason = DlssNr::OutputReason::None;
+    }
+    // Hiding output must not reset an otherwise composed model history every
+    // frame. Final transport failure still requests a fresh history.
+    late.reset = outputStatus.state == DlssNr::OutputState::Failed ||
+                 (slot.residualOnly ? !appliedResidual : !outputStatus.composed);
+    late.Say(outputStatus.state == DlssNr::OutputState::Failed        ? "NR final output failed."
+             : outputStatus.hidden                                   ? "NR changes are hidden."
              : ran                                                    ? (slot.residualOnly
                                                                              ? (matchedResponse
                                                                                     ? "Applying pre-SR changes with HDR brightness matching (local fallback enabled)."

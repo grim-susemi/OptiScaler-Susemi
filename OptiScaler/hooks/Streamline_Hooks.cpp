@@ -6,6 +6,7 @@
 #include <framegen/dlssg/MfgUnlock.h>
 #endif
 #include <dlssnr/DlssNr_StreamlinePicture.h>
+#include <dlssnr/DlssNr_MfgObserverStreamline.h>
 // nr-xefg R12: DlssNr::NativeProbeAdmission is the reviewed, behavioural-tested strict saturating latch
 // (tests/nr_native_probe_budget_smoke.cpp, 6 cases); the R12 Streamline pair diagnostics reuse it instead of
 // introducing a second, untested budget policy.
@@ -27,6 +28,7 @@
 #include <magic_enum.hpp>
 #include "detours/detours.h"
 #include "SlPairDetours.h"
+#include "CommonDetours.h"
 
 namespace
 {
@@ -44,6 +46,7 @@ DlssNr::NativeProbeAdmission slPairStatusAdmission;
 // export that was merely resolved (a non-null o_sl* pointer is NOT proof of an attached detour) and a failed
 // cleanup can leave this state - and the trampoline slots it belongs to - intact for a retry.
 SlPairDetours::PairState slPairState;
+CommonDetours::State commonState;
 
 // The real Detours entry points, bound once, so the installer a test drives is the installer production runs.
 const SlPairDetours::Api detoursApi {
@@ -613,7 +616,15 @@ sl::Result StreamlineHooks::hkslEvaluateFeature(sl::Feature feature, const sl::F
         }
     }
 
+    auto observation = DlssNr::MfgObserver::Streamline(
+        reinterpret_cast<uintptr_t>(o_slEvaluateFeature), feature, frame, inputs, numInputs, cmdBuffer);
     auto result = o_slEvaluateFeature(feature, frame, inputs, numInputs, cmdBuffer);
+    if (observation.session)
+    {
+        observation.result = static_cast<uint32_t>(result);
+        observation.resultKnown = true;
+        DlssNr::MfgObserver::Publish(observation);
+    }
     return result;
 }
 
@@ -2566,23 +2577,14 @@ void StreamlineHooks::unhookCommon()
 {
     LOG_FUNC();
 
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    if (o_common_slGetPluginFunction)
-        DetourDetach(&(PVOID&) o_common_slGetPluginFunction, hkcommon_slGetPluginFunction);
-
-    auto detourResult = DetourTransactionCommit();
-    if (detourResult != NO_ERROR)
-    {
-        LOG_ERROR("Failed to unhook Common: {:X}", detourResult);
-    }
-    else
-    {
+    const auto outcome = CommonDetours::Remove(detoursApi, commonState, (void**) &o_common_slGetPluginFunction,
+                                               (void*) &hkcommon_slGetPluginFunction, [] {
         systemCaps = nullptr;
         systemCapsSl15 = nullptr;
-        o_common_slGetPluginFunction = nullptr;
-    }
+    });
+    if (outcome.failedStep != SlPairDetours::Step::None)
+        LOG_ERROR("Failed to unhook Common at {}: {:X}", SlPairDetours::StepName(outcome.failedStep),
+                  outcome.failedHr);
 }
 
 void StreamlineHooks::hookCommon(HMODULE slCommon)
@@ -2595,27 +2597,18 @@ void StreamlineHooks::hookCommon(HMODULE slCommon)
         return;
     }
 
-    if (o_common_slGetPluginFunction)
-        unhookCommon();
-
-    o_common_slGetPluginFunction =
-        reinterpret_cast<PFN_slGetPluginFunction>(KernelBaseProxy::GetProcAddress_()(slCommon, "slGetPluginFunction"));
-
-    if (o_common_slGetPluginFunction != nullptr)
-    {
-        LOG_TRACE("Hooking slGetPluginFunction in sl.common");
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-
-        DetourAttach(&(PVOID&) o_common_slGetPluginFunction, hkcommon_slGetPluginFunction);
-
-        auto detourResult = DetourTransactionCommit();
-        if (detourResult != NO_ERROR)
-        {
-            LOG_ERROR("Failed to hook Common: {:X}", detourResult);
-            o_common_slGetPluginFunction = nullptr;
-        }
-    }
+    const auto outcome = CommonDetours::Install(
+        detoursApi, commonState, (void**) &o_common_slGetPluginFunction, (void*) &hkcommon_slGetPluginFunction,
+        slCommon,
+        [](HMODULE module) -> void* {
+            return (void*) KernelBaseProxy::GetProcAddress_()(module, "slGetPluginFunction");
+        },
+        [] {
+            systemCaps = nullptr;
+            systemCapsSl15 = nullptr;
+        });
+    if (outcome.failedStep != SlPairDetours::Step::None)
+        LOG_ERROR("Failed to hook Common at {}: {:X}", SlPairDetours::StepName(outcome.failedStep), outcome.failedHr);
 }
 
 bool StreamlineHooks::isInterposerHooked() { return o_slInit != nullptr || o_slInit_sl1 != nullptr; }
@@ -2626,7 +2619,11 @@ bool StreamlineHooks::isDlssgHooked() { return o_dlssg_slGetPluginFunction != nu
 
 bool StreamlineHooks::isLocalDlssgHooked() { return o_local_dlssg_slGetPluginFunction != nullptr; }
 
-bool StreamlineHooks::isCommonHooked() { return o_common_slGetPluginFunction != nullptr; }
+bool StreamlineHooks::isCommonHooked()
+{
+    return commonState.installed.load(std::memory_order_acquire) ||
+           commonState.externallyCommitted.load(std::memory_order_acquire);
+}
 
 bool StreamlineHooks::isPclHooked() { return o_pcl_slGetPluginFunction != nullptr; }
 
