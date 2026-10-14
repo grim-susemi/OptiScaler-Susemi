@@ -130,7 +130,7 @@ function ResetCase([string]$Label) {
 try {
   $asi = Join-Path $CacheRoot 'OptiScaler.asi'
   if (-not (Test-Path -LiteralPath $asi)) { New-Item -ItemType HardLink -Path $asi -Target (Join-Path $CacheRoot 'OptiScaler.dll') | Out-Null }
-  if ((Sha $asi) -ne '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60') { throw 'core cache pin mismatch' }
+  if ((Sha $asi) -ne '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff') { throw 'core cache pin mismatch' }
   $sourceBefore = Snapshot $CacheRoot
   $game = NewGame
   $before = Snapshot $game

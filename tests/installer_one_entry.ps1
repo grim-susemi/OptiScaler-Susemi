@@ -23,6 +23,7 @@
 param(
   [string]$PackageRoot = (Split-Path -Parent $PSScriptRoot),
   [string]$InstallerPath = '',
+  [string]$PreflightRoot = (Join-Path (Split-Path -Parent $PSScriptRoot) 'tests/installer_fixtures/preflight'),
   [string]$FixtureRoot = (Join-Path $env:TEMP 'susemi-inst-fixture')
 )
 $ErrorActionPreference = 'Stop'
@@ -468,7 +469,7 @@ function Invoke-HoldEpilogueCases {
   $pass = (Test-FinalStatus $r 1 'refused' 'consent-required') -and (Test-SameSnapshot $before $after) -and (Test-SameSnapshot $jb $ja) -and (Test-NoHoldLine $r $holdTexts)
   Write-GuidedReceipt 'h2-arg-remove-no' $r $pass @{ before = $before; after = $after; journalsBefore = $jb; journalsAfter = $ja }
 
-  $readyRoot = Join-Path $PackageRoot 'tests/installer_fixtures/preflight/F1-ready'
+  $readyRoot = Join-Path $PreflightRoot 'F1-ready'
   $readyExe = Join-Path $readyRoot 'GameA/bin64/GameA.exe'
   if (-not (Test-Path -LiteralPath $readyExe -PathType Leaf)) { throw 'Missing pinned ready fixture GameA.exe' }
   $journal = Join-Path $scratch 'hold-arg-diagnose-journals'
@@ -556,10 +557,10 @@ function Invoke-GuidedSafetyCases {
     if ($null -eq $fn) { throw "Missing actual function: $name" }
     . ([scriptblock]::Create($fn.Extent.Text))
   }
-  $ual = Join-Path $PackageRoot 'tests/installer_fixtures/preflight/F1-ready/GameA/bin64/winmm.dll'
-  $core = Join-Path $PackageRoot 'tests/installer_fixtures/preflight/F1-ready/GameA/bin64/OptiScaler.asi'
+  $ual = Join-Path $PreflightRoot 'F1-ready/GameA/bin64/winmm.dll'
+  $core = Join-Path $PreflightRoot 'F1-ready/GameA/bin64/OptiScaler.asi'
   if ((Get-FileHash -LiteralPath $ual).Hash -ine 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7' -or
-      (Get-FileHash -LiteralPath $core).Hash -ine '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60') { throw 'Fixture source pins mismatch' }
+      (Get-FileHash -LiteralPath $core).Hash -ine '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff') { throw 'Fixture source pins mismatch' }
   foreach ($name in @('bare-no', 'bare-eof', 'bare-invalid', 'unknown-winmm', 'unknown-opti', 'unknown-both', 'directory-winmm', 'directory-opti', 'link-winmm', 'dangling-opti', 'non-winmm', 'non-winmm-ready', 'ready-winmm-no')) {
     $fx = New-X64Fixture $name
     switch ($name) {
@@ -630,7 +631,7 @@ function Invoke-GuidedSafetyCases {
   }
   $pass = (Test-FinalStatus $r 0 'installed' 'ok') -and $phases -contains 'applied' -and
     $pins['winmm.dll'] -ieq 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7' -and
-    $pins['OptiScaler.asi'] -ieq '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60' -and
+    $pins['OptiScaler.asi'] -ieq '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff' -and
     ((Get-HintMarkers $r) -eq 0)
   $journalRecords = @{}
   foreach ($file in @(Get-ChildItem -LiteralPath $journal -File)) { $journalRecords[$file.Name] = [IO.File]::ReadAllText($file.FullName) }
@@ -753,7 +754,7 @@ function Invoke-AdvisoryCases {
 
 function Invoke-PortableSourceCases {
   $sourceRoot = $PackageRoot
-  $corePin = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
+  $corePin = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
   $ualPin = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
   $ualRel = 'tools/asi-loader/Ultimate-ASI-Loader-x64.dll'
   $resourcePins = [ordered]@{
@@ -767,9 +768,10 @@ function Invoke-PortableSourceCases {
     'OptiScaler/libxess_dx11.dll'='c7cfe86f0c9d94e4fb3696d3cd5035e2bbb6a8b1b0572f8b7395a4cdfd0c625e'
     'OptiScaler/libxess_fg.dll'='ec5e0c65e075570c6ede72618bb666d0be0c2e10b2ea9762c0fe8cb8e375ab27'
   }
-  $archive = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip'
-  if ((Get-FileHash -LiteralPath $archive).Hash -ine '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a') { throw 'Explicit ZIP prerequisite pin mismatch' }
-  foreach ($name in @('p1-unset', 'p1-empty', 'p2-missing-core', 'p2-missing-ual', 'p3-corrupt-core', 'p3-corrupt-ual', 'p3-unreadable-core', 'p3-unreadable-ual', 'p4-absent-zip', 'p4-corrupt-zip', 'p4-directory-zip', 'p5-pinned-zip')) {
+  # NOT-RUNNABLE: p5-pinned-zip (explicit SUSEMI_RC2_ZIP success path) needs the deleted rc2 zip
+  # (sha 42bac65f...1cc2a); the installer pins that archive, so it cannot be substituted.
+  Write-Output 'NOT-RUNNABLE: p5-pinned-zip (requires the deleted rc2 zip, sha 42bac65f...1cc2a)'
+  foreach ($name in @('p1-unset', 'p1-empty', 'p2-missing-core', 'p2-missing-ual', 'p3-corrupt-core', 'p3-corrupt-ual', 'p3-unreadable-core', 'p3-unreadable-ual', 'p4-absent-zip', 'p4-corrupt-zip', 'p4-directory-zip')) {
     $PackageRoot = Join-Path $scratch ($name + '-package')
     New-Item -ItemType Directory -Path $PackageRoot | Out-Null
     foreach ($rel in @('Install_OptiScaler_windows.bat', 'setup_windows.bat', 'tools/susemi_installer.ps1', 'tools/susemi_transaction.ps1', 'tools/susemi_stage_helpers.ps1', 'OptiScaler.dll', $ualRel)) {
@@ -798,7 +800,6 @@ function Invoke-PortableSourceCases {
       [IO.File]::WriteAllText($script:PortableOverride, 'corrupt')
     }
     if ($name -eq 'p4-directory-zip') { $script:PortableOverride = $PackageRoot }
-    if ($name -eq 'p5-pinned-zip') { $script:PortableOverride = $archive }
     $fx = New-X64Fixture $name
     $journal = Join-Path $scratch ($name + '-journals')
     New-Item -ItemType Directory -Path $journal | Out-Null

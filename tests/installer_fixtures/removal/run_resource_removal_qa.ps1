@@ -2,8 +2,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$PackageRoot,
   [Parameter(Mandatory=$true)][string]$EvidenceDir,
-  [Parameter(Mandatory=$true)][string]$CacheRoot,
-  [string]$Rc2Zip = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip'
+  [Parameter(Mandatory=$true)][string]$CacheRoot
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Path $EvidenceDir -Force | Out-Null
@@ -91,9 +90,11 @@ try {
     Copy-Item -LiteralPath (Join-Path $PackageRoot $name) -Destination $dest -Force
   }
   $source=Map $CacheRoot;$default=Map $defaultRoot
-  foreach ($mode in @('default-directory','explicit-pinned-zip')) {
+  # NOT-RUNNABLE: 'explicit-pinned-zip' success mode needs the deleted rc2 zip (sha 42bac65f...1cc2a);
+  # the installer refuses any other archive via SUSEMI_RC2_ZIP. Not faked here.
+  Write-Host 'NOT-RUNNABLE: explicit-pinned-zip success mode (requires the deleted rc2 zip, sha 42bac65f...1cc2a)'
+  foreach ($mode in @('default-directory')) {
     $game=NewGame $mode;$before=Map $game;$zip=$null
-    if ($mode -eq 'explicit-pinned-zip') { $zip=$Rc2Zip }
     $r=Run 'install' $game $zip
     Assert ($r.exit -eq 0 -and $r.stdout -match 'status=installed reason=ok') ($mode+' actual BAT installs')
     Assert ($r.stdout -match 'setup_payloads=verified setup_expected=11 setup_verified=11 resources_expected=9 resources_verified=9' -and

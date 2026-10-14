@@ -3,7 +3,7 @@ param(
   [Parameter(Mandatory=$true)][string]$PackageRoot,
   [Parameter(Mandatory=$true)][string]$EvidenceDir,
   [Parameter(Mandatory=$true)][string]$CacheRoot,
-  [string]$Rc2Zip = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip'
+  [string]$PackageZip = 'C:/omo-research/release-v11.4-prep/out/OptiScaler-NR-v11.4.zip'
 )
 $ErrorActionPreference = 'Stop'
 $psExe = Join-Path $PSHOME 'powershell.exe'
@@ -20,7 +20,7 @@ $pins = [ordered]@{
 }
 $allPins = [ordered]@{}
 foreach ($name in $pins.Keys) { $allPins[$name] = $pins[$name] }
-$allPins['OptiScaler.dll'] = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
+$allPins['OptiScaler.dll'] = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
 $allPins['tools/asi-loader/Ultimate-ASI-Loader-x64.dll'] = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
 $owned = Join-Path $EvidenceDir ('owned-stage-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $owned -Force | Out-Null
@@ -84,10 +84,10 @@ try {
   # One extraction cache persists across material revisions and later resource
   # tests. Never copy the archive or make a full vendor tree per fixture.
   if (-not (Test-Path -LiteralPath $CacheRoot)) {
-    if ((Sha $Rc2Zip) -ne '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a') { throw 'cache archive pin mismatch' }
+    if ((Sha $PackageZip) -ne 'd26fcfa69736ea06a1be3f42657f6ee5da4df1284e10adc69d84f6acd4eed759') { throw 'cache archive pin mismatch' }
     New-Item -ItemType Directory -Path $CacheRoot | Out-Null
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $z = [IO.Compression.ZipFile]::OpenRead($Rc2Zip)
+    $z = [IO.Compression.ZipFile]::OpenRead($PackageZip)
     try {
       foreach ($name in $allPins.Keys) {
         $entry = @($z.Entries | Where-Object { $_.FullName -ceq $name })
@@ -104,12 +104,14 @@ try {
   $sourceMap = Map $CacheRoot
   # The default is exercised by an actual -File invocation at this package's
   # real PSScriptRoot, not an AST-defined function with an explicit root.
-  foreach ($mode in @('default-directory', 'explicit-directory', 'pinned-zip')) {
+  # NOT-RUNNABLE: the helper's -Rc2Zip success path is pinned to the deleted rc2 archive sha
+  # (42bac65f...1cc2a); the v11.4 package zip is correctly refused by it. Not faked here.
+  Write-Output 'NOT-RUNNABLE: pinned-zip success mode (requires the deleted rc2 zip, sha 42bac65f...1cc2a)'
+  foreach ($mode in @('default-directory', 'explicit-directory')) {
     $stage = Join-Path $owned 'stage'
     New-Item -ItemType Directory -Path $stage | Out-Null
     $a = @('resources', '-StageDir', $stage)
     if ($mode -eq 'explicit-directory') { $a += @('-PackageRoot', $CacheRoot) }
-    if ($mode -eq 'pinned-zip') { $a += @('-Rc2Zip', $Rc2Zip) }
     $r = RunHelper $a $mode
     CheckNine $r $stage $mode
     $v = RunHelper @('resources-verify', '-StageDir', $stage) ($mode + '-verify')

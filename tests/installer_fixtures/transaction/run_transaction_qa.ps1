@@ -24,8 +24,9 @@ $installer   = Join-Path $PackageRoot 'tools\susemi_installer.ps1'
 $transaction = Join-Path $PackageRoot 'tools\susemi_transaction.ps1'
 $lockHolder  = Join-Path $PSScriptRoot 'lock_holder.ps1'
 $psExe       = Join-Path $PSHOME 'powershell.exe'
-$zipPath     = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip'
-$pinCore     = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
+$zipPath     = 'C:/omo-research/release-v11.4-prep/out/OptiScaler-NR-v11.4.zip'
+$pinZip      = 'd26fcfa69736ea06a1be3f42657f6ee5da4df1284e10adc69d84f6acd4eed759'
+$pinCore     = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
 $pinUal      = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
 $emptySha    = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 $notepadExe  = 'C:\Windows\System32\notepad.exe'
@@ -39,7 +40,7 @@ New-Item -ItemType Directory -Path $rawDir -Force | Out-Null
 $script:localAppData = Join-Path $ScratchRoot 'local'
 $script:journalRoot = Join-Path $script:localAppData 'susemi-installer\journal'
 New-Item -ItemType Directory -Path $script:journalRoot -Force | Out-Null
-$script:coordEnv = @{ 'LOCALAPPDATA' = $script:localAppData; 'SUSEMI_TX_JOURNAL_ROOT' = ''; 'SUSEMI_RC2_ZIP' = $zipPath }
+$script:coordEnv = @{ 'LOCALAPPDATA' = $script:localAppData; 'SUSEMI_TX_JOURNAL_ROOT' = ''; 'SUSEMI_RC2_ZIP' = '' }
 
 $script:unreapedOwnedChild = $false
 $script:caseName = ''
@@ -245,7 +246,7 @@ function Invoke-Scenario([string]$name, [scriptblock]$body) {
 
 $defaultMapBefore = ShaMap $defaultJournalRoot
 $defaultExistedBefore = Test-Path -LiteralPath $defaultJournalRoot
-if ((Sha256 $zipPath) -ne '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a') { throw 'Pinned ZIP prerequisite is missing or mismatched' }
+if ((Sha256 $zipPath) -ne $pinZip) { throw 'v11.4 package ZIP prerequisite is missing or mismatched' }
 
 Invoke-Scenario 'a-happy-asi-ual' {
   $game = Join-Path $ScratchRoot 'a\game'

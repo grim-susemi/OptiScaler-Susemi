@@ -25,7 +25,7 @@ param(
   [string]$EvidenceDir = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-generic-installer-diagnose/w3/task-9',
   [string]$PackageRoot = '',
   [string]$ScratchRoot = '',
-  [string]$Rc2Zip = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip',
+  [string]$Rc2Zip = 'C:/omo-research/release-v11.4-prep/out/OptiScaler-NR-v11.4.zip',
   [string]$PingExe = 'C:\Windows\System32\ping.exe'
 )
 
@@ -34,8 +34,8 @@ $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($PackageRoot)) { $PackageRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path }
 $installer = Join-Path $PackageRoot 'tools\susemi_installer.ps1'
 $psExe = Join-Path $PSHOME 'powershell.exe'
-$pinZip = '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a'
-$pinCore = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
+$pinZip = 'd26fcfa69736ea06a1be3f42657f6ee5da4df1284e10adc69d84f6acd4eed759'
+$pinCore = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
 $pinUal = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
 $defaultJournalRoot = Join-Path $env:LOCALAPPDATA 'susemi-installer\journal'
 
@@ -211,7 +211,7 @@ function New-CaseJournalRoot([string]$case) {
 
 function Case-Env([string]$jr) {
   $local = Split-Path -Parent (Split-Path -Parent $jr)
-  return @{ 'LOCALAPPDATA' = $local; 'SUSEMI_TX_JOURNAL_ROOT' = ''; 'SUSEMI_RC2_ZIP' = $Rc2Zip }
+  return @{ 'LOCALAPPDATA' = $local; 'SUSEMI_TX_JOURNAL_ROOT' = ''; 'SUSEMI_RC2_ZIP' = '' }
 }
 
 # real journal root snapshot / restore (the T7 before=0/after=0 rule) -------------
