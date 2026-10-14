@@ -347,6 +347,7 @@ function Get-DiagnosisContext {
   $ctx.cands = $cands
   $UAL_SHA = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
   $OPT_SHA = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
+  $OPT_SHA_NEW = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
   $reshadeIniExists = Test-Path -LiteralPath (Join-Path $exeDir 'ReShade.ini')
   $reshadeDirExists = Test-Path -LiteralPath (Join-Path $exeDir 'reshade-shaders')
   $ctx.reshadeIniExists = $reshadeIniExists; $ctx.reshadeDirExists = $reshadeDirExists
@@ -361,7 +362,7 @@ function Get-DiagnosisContext {
       $prod = [string]$vi.ProductName
     } catch {}
     if (($sha -eq $UAL_SHA) -or ($orig -ieq 'Ultimate-ASI-Loader-x64.dll')) { $ualNames += @($f.Name) }
-    elseif (($sha -eq $OPT_SHA) -or ($orig -ieq 'OptiScaler.dll')) { $optiNames += @($f.Name) }
+    elseif (($sha -eq $OPT_SHA) -or ($sha -eq $OPT_SHA_NEW) -or ($orig -ieq 'OptiScaler.dll')) { $optiNames += @($f.Name) }
     elseif ($orig -like '*ReShade*' -or $prod -like '*ReShade*') { $reshadeNames += @($f.Name) }
     elseif (((($reshadeIniExists) -or ($reshadeDirExists)) -and ($f.Name -ieq 'ReShade.asi')) -and ($(Get-PeValid $f.FullName))) { $reshadeNames += @($f.Name) }
   }
@@ -685,7 +686,7 @@ function Get-ReshadeProxyCandidate {
     if ($f.Name -ieq 'ReShade.asi') { continue }
     $sha = ''
     try { $sha = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() } catch { continue }
-    if ($sha -eq $UalSha -or $sha -eq $CoreSha) { continue }
+    if ($sha -eq $UalSha -or $sha -eq $CoreSha -or $sha -eq $Rc2CoreSha) { continue }
     $orig = ''; $prod = ''
     try {
       $vi = (Get-Item -LiteralPath $f.FullName -ErrorAction Stop).VersionInfo
@@ -1012,7 +1013,8 @@ function Invoke-InteractiveSession {
 
 $Rc2ZipSha     = '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a'
 $CoreEntryName = 'OptiScaler.dll'
-$CoreSha       = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
+$CoreSha       = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
+$Rc2CoreSha    = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'  # core inside the legacy rc2 ZIP (SUSEMI_RC2_ZIP mode only)
 $UalStagedRel  = 'tools\asi-loader\Ultimate-ASI-Loader-x64.dll'
 $UalSha        = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
 $ResourcePins = [ordered]@{
@@ -1433,6 +1435,8 @@ function Invoke-InstallTransaction {
       Write-InstallExpectation -M $M
       Write-InstallProgress -Stage 1 -Total 5 -Complete:$true -M $M
     } else {
+    # Legacy rc2 ZIP mode installs the rc2 core; every later core check in this call uses its pin.
+    $CoreSha = $Rc2CoreSha
     # (1) byte-exact local rc2 ZIP, offline only.
     if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
       Write-StatusLine -Status 'refused' -Reason 'rc2-zip-absent' -Human ("local rc2 ZIP not found: {0}" -f $zipPath)
