@@ -26,6 +26,91 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
                                             slot.identity.application == consumer.application)) &&
             (!newest || slot.serial > newest->serial))
             newest = &slot;
+
+    // Runtime-learned application lag compensation.
+    // If exact match yielded no slot, test for a constant lag of 1 frame between
+    // evaluation and presentation (e.g. Dawnwalker evaluate before PRESENT_START).
+    static uint32_t lag1Streak = 0;
+    static bool lag1Locked = false;
+    static uint64_t lastRestampedSerial = 0;
+    bool lag1CandidateFound = false;
+    LateContext::Slot* lag1Candidate = nullptr;
+
+    if (!newest && consumer.applicationKnown && consumer.application > 0)
+    {
+        uint32_t lagMatchCount = 0;
+        for (auto& slot : late.slots)
+        {
+            if (slot.pending && !slot.residualOnly && slot.identity.owner == &shader &&
+                slot.identity.SameConsumer(consumer) &&
+                slot.identity.applicationKnown &&
+                slot.identity.application == (consumer.application - 1))
+            {
+                lagMatchCount++;
+                if (!lag1Candidate || slot.serial > lag1Candidate->serial)
+                    lag1Candidate = &slot;
+            }
+        }
+        if (lagMatchCount == 1 && lag1Candidate != nullptr)
+        {
+            lag1CandidateFound = true;
+            lag1Streak++;
+            if (!lag1Locked && lag1Streak >= 3)
+            {
+                lag1Locked = true;
+                static std::atomic<uint32_t> lockLogSeq {0};
+                const uint32_t lseq = lockLogSeq.fetch_add(1, std::memory_order_relaxed);
+                if (lseq < 8 || (lseq % 1024) == 0)
+                {
+                    LOG_INFO("NR_XEFG_LAG1_LOCKED seq={} consumerApp={} slotApp={} serial={}",
+                             lseq + 1, consumer.application, lag1Candidate->identity.application, lag1Candidate->serial);
+                }
+            }
+        }
+        else
+        {
+            if (lag1Locked)
+            {
+                static std::atomic<uint32_t> dropLogSeq {0};
+                const uint32_t dseq = dropLogSeq.fetch_add(1, std::memory_order_relaxed);
+                if (dseq < 8 || (dseq % 1024) == 0)
+                {
+                    LOG_INFO("NR_XEFG_LAG1_DROPPED seq={} consumerApp={} lagMatches={}",
+                             dseq + 1, consumer.application, lagMatchCount);
+                }
+            }
+            lag1Streak = 0;
+            lag1Locked = false;
+        }
+
+        if (lag1Locked && lag1CandidateFound && lag1Candidate != nullptr)
+        {
+            newest = lag1Candidate;
+            newest->identity.application = consumer.application;
+            lastRestampedSerial = newest->serial;
+        }
+    }
+    else if (newest)
+    {
+        // When exact match succeeds on a slot other than the one restamped by this frame's
+        // earlier call (e.g. genuine exact match in Crimson Desert lag=0), reset lag streak and lock.
+        if (newest->serial != lastRestampedSerial)
+        {
+            if (lag1Locked)
+            {
+                static std::atomic<uint32_t> dropLogSeq {0};
+                const uint32_t dseq = dropLogSeq.fetch_add(1, std::memory_order_relaxed);
+                if (dseq < 8 || (dseq % 1024) == 0)
+                {
+                    LOG_INFO("NR_XEFG_LAG1_DROPPED seq={} consumerApp={} reason=exact_match",
+                             dseq + 1, consumer.application);
+                }
+            }
+            lag1Streak = 0;
+            lag1Locked = false;
+        }
+    }
+
     if (!newest)
         return false;
     auto& slot = *newest;
