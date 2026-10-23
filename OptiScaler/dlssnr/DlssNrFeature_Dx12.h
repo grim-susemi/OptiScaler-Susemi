@@ -1,6 +1,8 @@
 #pragma once
 
 #include "DlssNr_Status.h"
+#include "DlssNr_FinishedConsumer.h"
+#include "DlssNr_StreamlinePicture.h"
 #include <d3d12.h>
 #include <dxgi1_4.h>
 #include <string>
@@ -28,7 +30,9 @@ void FinishedPicturePromise(LatePromiseBatch& batch, ID3D12CommandQueue* queue, 
 void FinishedPictureSubmitted(LatePromiseBatch& batch, ID3D12CommandQueue* queue, UINT count,
                               ID3D12CommandList* const* lists);
 void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue);
+StreamlinePicture::ConsumerSnapshot CaptureFinishedConsumer();
 void ApplyToStreamlinePicture(IDXGISwapChain* swapchain, ID3D12Resource* picture, ID3D12CommandQueue* queue);
+void SkipFinishedPicture(IDXGISwapChain* swapchain);
 void ApplyToFinishedPictureDx11(IDXGISwapChain* swapchain);
 void FinishedPictureColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE colorSpace);
 
@@ -45,10 +49,12 @@ struct XeFGCapture
     bool ready = false;       // same application queue, or its readiness fence completed
     bool sameQueue = false;   // the capture's producer queue is the application queue
     uint64_t serial = 0;     // the pending capture's slot serial
+    FinishedIdentity identity {};
 };
 bool XeFGPendingCapture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
-                        XeFGCapture& facts);
-bool ApplyXeFGPicture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space);
+                        XeFGCapture& facts, const FinishedIdentity& consumer = {});
+bool ApplyXeFGPicture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
+                      const XeFGCapture& capture = {});
 void XeFGCloseCaptures(uint64_t throughSerial);
 
 std::string DeferredDlssStatus();

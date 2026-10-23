@@ -1,8 +1,14 @@
 // Compile the production backend with mock NGX entry points and the real SDK parameter interface.
+#ifdef NR_PROXY_SOURCE
+#include NR_PROXY_SOURCE
+#else
 #include "../../OptiScaler/dlssnr/DlssNr_Proxy.cpp"
+#endif
 #include "../../OptiScaler/dlssnr/DlssNr_Status.cpp"
 #include "../../OptiScaler/upscalers/ShaderPipeline_Dx12.h"
 #include "../../OptiScaler/dlssnr/DlssNr_HoldParameters_Dx12.h"
+#include "../../OptiScaler/dlssnr/PassProfiles.h"
+#include <cstdio>
 
 namespace DlssNr::NgxDiagnostics
 {
@@ -74,6 +80,8 @@ struct Dx11Parameters : Mock::Params
     NVSDK_NGX_Result Get(const char*, ID3D12Resource**) const override { return NVSDK_NGX_Result_Fail; }
 };
 
+#include "ModelPreparation.h"
+
 int main()
 {
     DlssNr::Proxy::Context proxy;
@@ -97,6 +105,17 @@ int main()
         assert(Mock::latest->Get(key, &result) == NVSDK_NGX_Result_Success);
         return result;
     };
+    const auto creationUi = [](unsigned expected)
+    {
+        const auto* actual = std::get_if<unsigned int>(&Mock::creationValues.back().at("DLSSNR.UICorrection"));
+        if (!actual || *actual != expected)
+        {
+            std::printf("T6_CREATION_REJECT expected=%u typedUnsigned=%u actual=%u\n",
+                        expected, unsigned(actual != nullptr), actual ? *actual : 2u);
+            return false;
+        }
+        return true;
+    };
 
     // Creation has its own frame, and setters must preserve SDK types (not raw vtable offsets).
     assert(run() == NVSDK_NGX_Result_Success && !evaluated);
@@ -106,6 +125,17 @@ int main()
     assert(value.operator()<unsigned int>("DLSSNR.Width") == 1920);
     assert(value.operator()<unsigned int>("DLSSNR.Hint.Render.Preset") == 0);
     assert(value.operator()<float>("DLSSNR.Intensity") == 0.5f);
+    if (!creationUi(1u)) return 1;
+    for (const char* key : { "DLSSNR.ControlMask", "DLSSNR.UI", "DLSSNR.UIAlpha", "DLSSNR.Backbuffer" })
+        assert(std::get<ID3D12Resource*>(Mock::creationValues.back().at(key)) == nullptr);
+    for (const char* key : { "DLSSNR.UISubrectBaseX", "DLSSNR.UISubrectBaseY", "DLSSNR.UISubrectWidth",
+                            "DLSSNR.UISubrectHeight", "DLSSNR.UIAlphaSubrectBaseX", "DLSSNR.UIAlphaSubrectBaseY",
+                            "DLSSNR.UIAlphaSubrectWidth", "DLSSNR.UIAlphaSubrectHeight",
+                            "DLSSNR.BackbufferSubrectBaseX", "DLSSNR.BackbufferSubrectBaseY",
+                            "DLSSNR.BackbufferSubrectWidth", "DLSSNR.BackbufferSubrectHeight" })
+        assert(std::get<unsigned int>(Mock::creationValues.back().at(key)) == 0u);
+    int wrongType = 0;
+    assert(Mock::latest->Get("DLSSNR.UICorrection", &wrongType) == NVSDK_NGX_Result_Fail);
     assert(!proxy.Ready(epoch));
     CompletionMock::complete = true;
     assert(proxy.Ready(epoch));
@@ -128,15 +158,21 @@ int main()
     assert(value.operator()<unsigned int>("DLSSNR.Reset") == 0);
 
     // Creation-time tuning edits rebuild; the previous GPU feature/map survive the retirement window.
-    settings.preset = 2;
+    const auto original = settings;
+    settings.uiCorrection = 0u;
+    assert(settings != original); // No tuning/dimension difference can mask this inequality.
     assert(run() == NVSDK_NGX_Result_Success && !evaluated);
     assert(Mock::creations == 2 && Mock::releases == 0 && Mock::destructions == 0);
-    assert(value.operator()<unsigned int>("DLSSNR.Hint.Render.Preset") == 2);
+    if (!creationUi(0u)) return 1;
+    assert(value.operator()<unsigned int>("DLSSNR.Hint.Render.Preset") == 0);
     for (int call = 0; call < 40; ++call)
         assert(run(false) == NVSDK_NGX_Result_Success && !evaluated);
     assert(Mock::releases == 0 && Mock::destructions == 0);
     for (int frame = 0; frame < 31; ++frame)
+    {
         assert(run() == NVSDK_NGX_Result_Success && evaluated);
+        assert(value.operator()<unsigned int>("DLSSNR.Reset") == (frame == 0 ? 1u : 0u));
+    }
     assert(Mock::releases == 0 && Mock::destructions == 0);
     assert(run() == NVSDK_NGX_Result_Success && evaluated);
     assert(Mock::releases == 0 && Mock::destructions == 0); // CPU epochs are not completion.
@@ -222,6 +258,7 @@ int main()
     CompatibilityMock::available = true;
     proxy.RetryAfterFailure();
     assert(run() == NVSDK_NGX_Result_Success && !evaluated);
+    if (!creationUi(0u)) return 1;
     proxy.ResetRecording(&commands);
     assert(run() == NVSDK_NGX_Result_Success && evaluated);
     assert(CompatibilityMock::creates == 1 && CompatibilityMock::evaluates == 1);
@@ -364,4 +401,7 @@ int main()
         assert(GetUpscalerResource_Dx12(table, NVSDK_NGX_Parameter_Color) == &color);
         assert(GetUpscalerResource_Dx12(table, NVSDK_NGX_Parameter_Output) == &output);
     }
+    if (!TestModelPreparation()) return 1;
+    std::printf("T6_PROXY_PASS typed-driver=1 typed-compatibility=1 null-bindings=4 subrects=12 "
+                "ui-only-replacement=1 history-reset=1 pending-map=1 ownership-closed=1\n");
 }

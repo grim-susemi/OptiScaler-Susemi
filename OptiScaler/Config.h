@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "SysUtils.h"
 #include "State.h"
@@ -258,6 +258,8 @@ class Config
     CustomOptional<bool> DlssNrEnabled { false };
     CustomOptional<bool> DlssNrRunBeforeSr { false };
     CustomOptional<bool> DlssNrFinishedPicture { false };
+    // Internal compatibility adoption; only explicit direct selection enables it.
+    CustomOptional<bool> DlssNrAutomaticUICorrection { false };
     // Fit the scene-to-finished HDR response for early residuals.
     CustomOptional<bool> DlssNrHdrTransfer { false };
     // Generate before SR, privately upscale the edit, then compose after SR.

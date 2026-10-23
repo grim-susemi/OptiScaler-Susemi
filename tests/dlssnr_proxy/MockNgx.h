@@ -4,6 +4,8 @@
 #include <map>
 #include <string>
 #include <variant>
+#include <optional>
+#include <vector>
 #include <nvsdk_ngx_params.h>
 
 struct ID3D12Device {};
@@ -27,10 +29,19 @@ template <typename T> struct Setting
 class Config
 {
   public:
-    Setting<int> DlssNrPreset, DlssNrStyle;
+    Setting<unsigned int> DlssNrPreset, DlssNrStyle;
     Setting<float> DlssNrIntensity { 0.5f }, DlssNrLocalStructure { 0.25f },
                    DlssNrLocalTone { 0.75f }, DlssNrSkinStructure { 0.375f };
     Setting<bool> DlssNrAutoMask { true };
+    Setting<bool> DlssNrRunBeforeSr, DlssNrFinishedPicture, DlssNrDeferredDlss,
+                  DlssNrResidualAcrossRr, DlssNrAutomaticUICorrection;
+    struct PassOverride
+    {
+        std::optional<unsigned int> preset, style;
+        std::optional<float> intensity, structure, tone, skin;
+        std::optional<bool> autoMask;
+    };
+    PassOverride DlssNrPassOverrides[29];
     static Config* Instance() { static Config config; return &config; }
 };
 
@@ -69,6 +80,7 @@ inline NVSDK_NGX_Result createResult = NVSDK_NGX_Result_Success;
 inline NVSDK_NGX_Result evaluateResult = NVSDK_NGX_Result_Success;
 inline Params* latest = nullptr;
 inline std::map<NVSDK_NGX_Handle*, NVSDK_NGX_Parameter*> handles;
+inline std::vector<std::map<std::string, Params::Value>> creationValues;
 
 inline NVSDK_NGX_Result Allocate(NVSDK_NGX_Parameter** params)
 {
@@ -89,6 +101,7 @@ inline NVSDK_NGX_Result Create(ID3D12GraphicsCommandList*, NVSDK_NGX_Feature fea
 {
     assert((int) feature == 18);
     ++creations;
+    creationValues.push_back(static_cast<Params*>(params)->values);
     if (createResult != NVSDK_NGX_Result_Success)
         return createResult;
     *handle = new NVSDK_NGX_Handle {};

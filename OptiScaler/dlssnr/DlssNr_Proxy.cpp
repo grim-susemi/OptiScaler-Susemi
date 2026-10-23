@@ -60,9 +60,7 @@ void SetCreationParameters(NVSDK_NGX_Parameter* params, const DlssNr::ModelSetti
 
     DlssNr::SetModelTuning(params, settings);
 
-    // UI correction at the model's own default: with no UI layer fed to it there is nothing to
-    // correct.
-    params->Set("DLSSNR.UICorrection", 1u);
+    params->Set("DLSSNR.UICorrection", settings.uiCorrection);
     params->Set("DLSSNR.ControlMask", static_cast<ID3D12Resource*>(nullptr));
     params->Set("DLSSNR.UI", static_cast<ID3D12Resource*>(nullptr));
     params->Set("DLSSNR.UIAlpha", static_cast<ID3D12Resource*>(nullptr));
@@ -153,9 +151,9 @@ unsigned int Context::Impl::Prepare(ID3D12GraphicsCommandList* cmdList, ID3D12De
         NgxDiagnostics::Scope nrCreateTrace;
         NgxDiagnostics::RuntimeReport(cmdList, device, "before CreateFeature(18)");
         LOG_INFO("NR diagnostic creation: {}x{}, preset={}, style={}, intensity={}, structure={}, tone={}, "
-                 "skin={}, autoMask={}, node masks=1/1, UI correction=1, UI/control/backbuffer=null, epoch={}",
+                 "skin={}, autoMask={}, node masks=1/1, UI correction={}, UI/control/backbuffer=null, epoch={}",
                  width, height, settings.preset, settings.style, settings.intensity, settings.localStructure,
-                 settings.localTone, settings.skinStructure, settings.autoMask, submissionEpoch);
+                 settings.localTone, settings.skinStructure, settings.autoMask, settings.uiCorrection, submissionEpoch);
         SetCreationParameters(state.params, settings, width, height);
 
         lifetime.Record(cmdList);

@@ -68,6 +68,7 @@ struct ModelStateDx12
     unsigned int width = 0;
     unsigned int height = 0;
     bool beforeUpscale = false;
+    bool finishedPicture = false;
     bool rayReconstruction = false;
     bool reset = true;
 

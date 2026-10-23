@@ -6,6 +6,29 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
 {
     std::lock_guard<std::recursive_mutex> nrLock(mutex);
     const Config& cfg = *Config::Instance();
+    outputStatus = {};
+    outputStatus.state = DlssNr::OutputState::WaitingForModel;
+    outputStatus.requested = DlssNr::ResolvePlacement(cfg.DlssNrRunBeforeSr.value_or_default(),
+        cfg.DlssNrDeferredDlss.value_or_default(), cfg.DlssNrResidualAcrossRr.value_or_default(),
+        cfg.DlssNrFinishedPicture.value_or_default());
+    outputStatus.effective = { frame.BeforeUpscale, outputStatus.requested.deferred, frame.FinishedPicture };
+    outputStatus.application = frame.SubmissionEpoch;
+    outputStatus.hidden = !cfg.DlssNrApplyModel.value_or_default();
+    outputCommands = nullptr;
+    modelRunning = false;
+    struct Outcome
+    {
+        State& s;
+        ~Outcome()
+        {
+            if (s.nr.failed)
+            {
+                s.outputStatus.state = DlssNr::OutputState::Failed;
+                if (s.outputStatus.reason == DlssNr::OutputReason::None)
+                    s.outputStatus.reason = DlssNr::OutputReason::Model;
+            }
+        }
+    } outcome { *this };
 
     if (nr.failed || cmdList == nullptr || colour == nullptr || depth == nullptr || motion == nullptr ||
         output == nullptr)
@@ -84,6 +107,7 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         return;
     }
     const auto guideWidth = guides.depth.width, guideHeight = guides.depth.height;
+    outputStatus.guidesValid = true;
 
     if (frame.Reset)
     {
@@ -131,6 +155,13 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     const auto workWidth = (unsigned int) (width * workScale + 0.5f);
     const auto workHeight = (unsigned int) (height * workScale + 0.5f);
     const bool reduced = workWidth != width || workHeight != height;
+    reconstruction = DlssNrResolveReconstruction(cfg.DlssNrTransfer.value_or_default(),
+                                                 frame.BeforeUpscale, reduced, workScale);
+    if (!reconstruction.privateEnlargement)
+    {
+        ReleaseEnlarger();
+        enlargementStatus.clear();
+    }
     if (!PrepareRunModels(cmdList, device, frame, desc, { width, height }, { workWidth, workHeight },
                           workScale, requestedPasses))
         return;
@@ -158,9 +189,10 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     // Advance capture scheduling only once the codec and models are ready.
     ++frames;
     lifetime.Collect();
-    CheckCaptureTrigger();
+    if (!frame.FinishedPicture)
+        CheckCaptureTrigger();
 
-    if (captureFrames.isActive())
+    if (!frame.FinishedPicture && captureFrames.isActive())
     {
         const auto captureDir = Util::DllPath().remove_filename() / "dlssnr-capture";
         const auto written = captureFrames.write(captureDir);
@@ -312,9 +344,11 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
         bool evaluated = false;
         modelFrame.color = passInput;
         modelFrame.output = passOutput;
-        result = static_cast<int>(nr.models[pass].Run(cmdList, device, modelFrame, PassSettings(cfg, pass),
+        result = static_cast<int>(nr.models[pass].Run(cmdList, device, modelFrame,
+                                                     PassSettings(cfg, pass, outputStatus.uiCorrection),
                                                      frame.SubmissionEpoch, &evaluated));
         modelRunning = evaluated && result == NVSDK_NGX_Result_Success;
+        outputStatus.evaluated |= modelRunning;
         if (!evaluated || result != NVSDK_NGX_Result_Success)
             break;
 
@@ -380,14 +414,12 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
 
         ID3D12Resource* resolveProxy = superDownOk ? nr.colorCopy : modelInput;
         ID3D12Resource* resolveAnswer = superDownOk ? nr.outputNative : finalAnswer;
-        bool enlargementReady = true;
-        const auto transfer = cfg.DlssNrTransfer.value_or_default();
+        const auto transfer = reconstruction.effective;
         bool resizeFieldReadable = false;
-        if (DlssNrUsesDlssEnlargement(transfer) && reduced && (transfer == 2 || workScale < 1.0f))
+        const auto Enlarge = [&]()
         {
             auto* enlarged = EnlargeMatchedResidual(cmdList, device, modelInput, finalAnswer, depthIn, motionIn,
                                                     frame, resolveParams, enlargementReset, timingQueue);
-            enlargementReady = enlarged != nullptr;
             if (enlarged) { resolveAnswer = enlarged; resolveParams.Transfer = transfer; }
             if (enlarged && transfer == 4)
             {
@@ -402,12 +434,8 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
                 resolveProxy = modelInput; resolveAnswer = finalAnswer;
                 resolveParams.Transfer = DlssNrSpatialTransfer(transfer); // Inspect the actual model pair.
             }
-        }
-        else
-        {
-            ReleaseEnlarger();
-            enlargementStatus.clear();
-        }
+            return enlarged != nullptr;
+        };
 
         // Resolve pre-SR inputs without UAV support through an owned scratch and copy-back.
         ID3D12Resource* resolveOriginal = targetSupportsUav ? nr.hdrCopy : target;
@@ -424,9 +452,18 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         }
 
-        const bool resolved =
-            enlargementReady && shader.DispatchPass(cmdList, resolveParams, resolveProxy, resolveAnswer,
-                                                    resolveOriginal, encoded.exposure, nullptr, resolveTarget, nullptr);
+        const bool resolved = DlssNrComposeReconstruction(reconstruction, Enlarge, [&]()
+        {
+            const bool composed = shader.DispatchPass(cmdList, resolveParams, resolveProxy, resolveAnswer,
+                                                      resolveOriginal, encoded.exposure, nullptr, resolveTarget, nullptr);
+            if (!composed)
+            {
+                nr.failed = true;
+                nr.reason = "the composition shader refused to run";
+                outputStatus.reason = DlssNr::OutputReason::Composition;
+            }
+            return composed;
+        });
         compositionSucceeded = resolved;
         if (resizeFieldReadable)
             Barrier(cmdList, enlarger->input.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -486,7 +523,17 @@ auto DlssNr_Dx12::State::Run(ID3D12GraphicsCommandList* cmdList, ID3D12Resource*
     // only the active rectangle and restores both resources before DLSS consumes the image.
     FinishColor(compositionSucceeded);
     if (compositionSucceeded)
+    {
         ++nr.successfulDispatches;
+        outputStatus.composed = true;
+        outputStatus.copyBack = true;
+        outputStatus.state = outputStatus.hidden ? DlssNr::OutputState::EvaluatedHidden
+                                                : DlssNr::OutputState::WaitingForModel;
+        ID3D12CommandList* real = nullptr;
+        outputCommands = Util::CheckForRealObject(__FUNCTION__, cmdList, (IUnknown**) &real) ? real : cmdList;
+    }
+    else if (outputStatus.evaluated && outputStatus.hidden)
+        outputStatus.state = DlssNr::OutputState::EvaluatedHidden;
 
     EndGpuTiming(cmdList);
 

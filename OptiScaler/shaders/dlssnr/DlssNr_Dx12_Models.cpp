@@ -7,6 +7,10 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
                                         float workScale, unsigned int requestedPasses)
 {
     const auto& cfg = *Config::Instance();
+    const auto uiCorrection = DlssNr::Profiles::CreationUICorrection(cfg, true,
+        frame.FinishedPicture ? DlssNr::UICorrectionInput::FinishedPicture :
+        frame.BeforeUpscale ? DlssNr::UICorrectionInput::Render : DlssNr::UICorrectionInput::Upscaled);
+    outputStatus.uiCorrection = uiCorrection;
     const auto width = native.width, height = native.height;
     const auto workWidth = work.width, workHeight = work.height;
     const bool cropColor = frame.BeforeUpscale && (width != desc.Width || height != desc.Height);
@@ -16,10 +20,11 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
     const bool resolutionChanged =
         nr.width != width || nr.height != height || nr.workWidth != workWidth || nr.workHeight != workHeight;
     const bool placementChanged = nr.width != 0 && (nr.beforeUpscale != frame.BeforeUpscale ||
-                                                    nr.rayReconstruction != frame.RayReconstruction);
+                                                    nr.rayReconstruction != frame.RayReconstruction ||
+                                                    nr.finishedPicture != frame.FinishedPicture);
 
     // Tuning changes require rebuilding the feature, but not its scratch textures.
-    const bool tuningChanged = !TuningMatchesFeature(cfg, requestedPasses);
+    const bool tuningChanged = !TuningMatchesFeature(cfg, requestedPasses, uiCorrection);
 
     if (resolutionChanged || placementChanged || (nr.models[0].HasFeature() && tuningChanged))
     {
@@ -57,6 +62,7 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
         nr.width = width;
         nr.height = height;
         nr.beforeUpscale = frame.BeforeUpscale;
+        nr.finishedPicture = frame.FinishedPicture;
         nr.rayReconstruction = frame.RayReconstruction;
         nr.reset = true;
     }
@@ -121,7 +127,8 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
         if (nr.passCreateFailed[pass])
             break;
         bool ready = false;
-        const auto prepared = nr.models[pass].Prepare(cmdList, device, workWidth, workHeight, PassSettings(cfg, pass),
+        const auto prepared = nr.models[pass].Prepare(cmdList, device, workWidth, workHeight,
+                                                      PassSettings(cfg, pass, uiCorrection),
                                                       frame.SubmissionEpoch, &ready);
         if (prepared != NVSDK_NGX_Result_Success)
         {
@@ -135,7 +142,7 @@ bool DlssNr_Dx12::State::PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID
                       NgxResultName(prepared));
             return false;
         }
-        nr.builtSettings[pass] = PassSettings(cfg, pass);
+        nr.builtSettings[pass] = PassSettings(cfg, pass, uiCorrection);
         if (!ready)
             return false;
     }
@@ -190,7 +197,8 @@ auto DlssNr_Dx12::State::NgxResultName(unsigned int r) -> const char*
     }
 }
 
-auto DlssNr_Dx12::State::TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses) -> bool
+auto DlssNr_Dx12::State::TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses,
+                                            unsigned int uiCorrection) -> bool
 {
     for (unsigned int pass = 0; pass < requestedPasses; ++pass)
     {
@@ -199,7 +207,7 @@ auto DlssNr_Dx12::State::TuningMatchesFeature(const Config& cfg, unsigned int re
         if (!nr.models[pass].HasFeature())
             continue;
 
-        if (nr.builtSettings[pass] != PassSettings(cfg, pass))
+        if (nr.builtSettings[pass] != PassSettings(cfg, pass, uiCorrection))
             return false;
     }
 

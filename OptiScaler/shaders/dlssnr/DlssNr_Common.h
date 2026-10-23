@@ -40,6 +40,31 @@ inline uint32_t DlssNrSpatialTransfer(uint32_t transfer)
     return DlssNrUsesDlssEnlargement(transfer) ? transfer - 1 : std::min(transfer, 3u);
 }
 
+struct DlssNrReconstruction
+{
+    uint32_t requested = 0;
+    uint32_t effective = 0;
+    bool privateEnlargement = false;
+    bool compatibilityFallback = false;
+};
+
+// Resolve the actual frame, not the configured placement. Keep intent for a later post frame.
+inline DlssNrReconstruction DlssNrResolveReconstruction(uint32_t requested, bool beforeUpscale,
+                                                        bool reduced, float workScale)
+{
+    const bool eligible = DlssNrUsesDlssEnlargement(requested) && reduced &&
+                          (requested == 2 || workScale < 1.0f);
+    return { requested, eligible && !beforeUpscale ? requested : DlssNrSpatialTransfer(requested),
+             eligible && !beforeUpscale, eligible && beforeUpscale };
+}
+
+// The same production gate drives the runtime and shipped-shader regression fixture.
+template <typename Enlarge, typename Compose>
+bool DlssNrComposeReconstruction(const DlssNrReconstruction& reconstruction, Enlarge enlarge, Compose compose)
+{
+    return (!reconstruction.privateEnlargement || enlarge()) && compose();
+}
+
 // Finished-colour shader's exposure-normalised brightness response, -12..12 stops.
 constexpr uint32_t kDlssNrHdrCurveBins = 48;
 

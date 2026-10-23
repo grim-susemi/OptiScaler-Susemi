@@ -10,6 +10,7 @@ struct ModelSettings
     unsigned int preset = 0, style = 0;
     float intensity = 1.0f, localStructure = 1.0f, localTone = 0.0f, skinStructure = -1.0f;
     bool autoMask = true;
+    unsigned int uiCorrection = 1;
     bool operator==(const ModelSettings&) const = default;
 };
 

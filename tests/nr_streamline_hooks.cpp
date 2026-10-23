@@ -36,6 +36,7 @@ static bool expectPq = false;
 static constexpr GUID colorSpaceKey = { 0x34a31e7b, 0x84c5, 0x44ef, { 0xa7, 0x4d, 0x6b, 0xd3, 0x60, 0x8c, 0xe5, 0x22 } };
 namespace DlssNr
 {
+void SkipFinishedPicture(IDXGISwapChain*) {}
 void ApplyToStreamlinePicture(IDXGISwapChain* swapchain, ID3D12Resource* picture, ID3D12CommandQueue* queue)
 {
     Expect(picture == expectedPicture, "Mixed local and game plugin buffers");

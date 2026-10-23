@@ -100,7 +100,8 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     void EndInputHold(NVSDK_NGX_Parameter* params);
     bool ProcessSeam(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params, bool beforeUpscale,
                      ID3D12CommandQueue* queue, bool rayReconstruction, unsigned long long submissionEpoch,
-                     bool interop = false, uint32_t featureFlags = 0);
+                     bool interop = false, uint32_t featureFlags = 0,
+                     const DlssNr::StreamlinePicture::ConsumerSnapshot& consumer = {});
     void ResetFinishedCommands(ID3D12CommandList* cmd);
     // Promise/resolution pass of the execute hook (see DlssNr_Dx12_State.h / DlssNr_LateSlot.h).
     // The batch is per ExecuteCommandLists call and carries only that call's tokens.
@@ -112,14 +113,15 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     // Returns whether NR ran; the caller's APPLY/SKIP diagnostic is emitted from this result
     // (todo 10: the XeFG owned handoff is the only caller that reads it).
     bool ApplyFinished(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
-                       bool gameFrameHandoff = false);
+                       bool gameFrameHandoff = false, const DlssNr::FinishedIdentity& consumer = {},
+                       uint64_t captureSerial = 0);
     void ApplyFinishedDx11(IDXGISwapChain* swapchain);
     // XeFG owned application-frame handoff (todo 10): capture facts and interval closure
     // for the finished application picture, under the owner mutex. See DlssNr::XeFG* in
     // dlssnr/DlssNrFeature_Dx12.h; the wiring in framegen/xefg/XeFG_Dx12.cpp drives these.
     bool PendingFinishedCapture(ID3D12Resource* picture, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE space,
-                                DlssNr::XeFGCapture& facts);
-    void CloseFinishedCaptures(uint64_t throughSerial);
+                                DlssNr::XeFGCapture& facts, const DlssNr::FinishedIdentity& consumer = {});
+    void CloseFinishedCaptures(uint64_t throughSerial, const DlssNr::FinishedIdentity& consumer = {});
     std::string FinishedStatus();
     std::string DeferredStatus();
 

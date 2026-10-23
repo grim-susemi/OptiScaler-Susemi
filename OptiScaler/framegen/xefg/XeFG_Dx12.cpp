@@ -1589,7 +1589,10 @@ void XeFG_Dx12::ResetNrHandoff()
     // stay owned with nothing to compose them (the live starvation), so the arm path is
     // told to refuse them. Activate()/Present() publish the usable state again.
     if (ClaimsFinishedConsumer())
+    {
+        DlssNr::StreamlinePicture::Consumer(_swapChain, true);
         DlssNr::PublishFinishedConsumer(DlssNr::FinishedConsumer::XeFGWaiting);
+    }
     DlssNr::XeFGCloseCaptures(std::numeric_limits<uint64_t>::max());
 }
 
@@ -1716,16 +1719,24 @@ void XeFG_Dx12::OwnedNrHandoff()
     // The accepted frame id is the id this Present site already holds - NOT GetDispatchIndex,
     // which reads the display counter (IFGFeature.cpp:135-161).
     const uint64_t frame = _lastDispatchedFrame;
+    // The proxy's current application picture cannot be associated with an older
+    // dispatched token when application markers have already advanced.
+    if (refusal == DlssNr::XeFGHandoff::SkipReason::None && frame != FrameCount())
+        refusal = DlssNr::XeFGHandoff::SkipReason::AmbiguousCapture;
 
     DlssNr::XeFGCapture facts {};
     DlssNr::XeFGHandoff::SkipReason reason = DlssNr::XeFGHandoff::SkipReason::None;
-    bool colourRefusal = refusal != DlssNr::XeFGHandoff::SkipReason::None;
+    bool wiringRefusal = refusal != DlssNr::XeFGHandoff::SkipReason::None;
 
-    if (!colourRefusal)
+    if (!wiringRefusal)
     {
         // Capture-lifecycle facts from NR (under the NR locks) feed the decision core, then
         // the tracker is called once for this accepted application frame.
-        const bool tracked = DlssNr::XeFGPendingCapture(picture.Get(), _gameCommandQueue, colorSpace, facts);
+        auto consumer = DlssNr::StreamlinePicture::Consumer(_swapChain);
+        consumer.identity.application = frame;
+        consumer.identity.applicationKnown = true;
+        const bool tracked = DlssNr::XeFGPendingCapture(picture.Get(), _gameCommandQueue, colorSpace, facts,
+                                                       consumer.identity);
         if (tracked)
         {
             const uint64_t serial = _nrHandoff.OpenInterval(frame);
@@ -1743,7 +1754,7 @@ void XeFG_Dx12::OwnedNrHandoff()
         if (outcome.applied)
         {
             // Compose with real-game-frame semantics on the XeFG-retained application queue.
-            if (DlssNr::ApplyXeFGPicture(picture.Get(), _gameCommandQueue, colorSpace))
+            if (DlssNr::ApplyXeFGPicture(picture.Get(), _gameCommandQueue, colorSpace, facts))
             {
                 // interval= is the tracker capture-interval serial (DlssNr_XeFGHandoff.h
                 // OpenInterval), a different space from NR's LateContext serial (todo H5).
@@ -1774,7 +1785,7 @@ void XeFG_Dx12::OwnedNrHandoff()
     // leftovers are still pending (todo H1) - so both close every pending capture; any other
     // tracker refusal names exactly the capture that was offered.
     const bool closeAllCaptures =
-        colourRefusal || reason == DlssNr::XeFGHandoff::SkipReason::NoCurrentCapture;
+        wiringRefusal || reason == DlssNr::XeFGHandoff::SkipReason::NoCurrentCapture;
     DlssNr::XeFGCloseCaptures(closeAllCaptures ? std::numeric_limits<uint64_t>::max() : facts.serial);
     LogNrXefgSkip(_nrGeneration, frame, DlssNr::XeFGHandoff::SkipReasonName(reason));
 

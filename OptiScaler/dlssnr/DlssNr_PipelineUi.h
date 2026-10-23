@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DlssNr_Status.h"
 #include <imgui/imgui.h>
 #include <algorithm>
 #include <string>
@@ -25,6 +26,42 @@ enum class Route
     FinishedBefore
 };
 
+inline DlssNrReconstruction ConfiguredReconstruction(uint32_t requested, bool beforeUpscale, float workScale)
+{
+    // Configuration has a scale, not the actual frame's rounded active extents.
+    return DlssNrResolveReconstruction(requested, beforeUpscale, workScale != 1.0f, workScale);
+}
+
+inline bool ReconstructionSelectable(uint32_t requested, bool beforeUpscale, float workScale)
+{
+    return workScale < 0.999f &&
+           !ConfiguredReconstruction(requested, beforeUpscale, workScale).compatibilityFallback;
+}
+
+inline const char* ReconstructionName(uint32_t transfer)
+{
+    static constexpr const char* names[] = { "Classic", "Matched residual", "Matched residual + DLSS",
+                                            "Lighting + colour", "Lighting + colour + DLSS" };
+    return names[std::min(transfer, 4u)];
+}
+
+enum class ModelState
+{
+    Disabled,
+    Waiting,
+    Active,
+    Failed
+};
+
+inline ModelState ReadModelState(bool enabled, const StatusSnapshot& status)
+{
+    if (!enabled)
+        return ModelState::Disabled;
+    if (!status.failureReason.empty())
+        return ModelState::Failed;
+    return status.running ? ModelState::Active : ModelState::Waiting;
+}
+
 struct View
 {
     Route route = Route::After;
@@ -34,6 +71,7 @@ struct View
     const char* privateUpscaler = "DLSS";
     unsigned int passes = 1;
     int scalePercent = 100;
+    DlssNrReconstruction reconstruction;
 };
 
 inline const char* SectionName(Section section)
@@ -89,6 +127,10 @@ inline void DrawTimingBar(double nrMs, double frameMs)
 inline void Draw(const View& view, Section& selected)
 {
     ImGui::PushID("NR pipeline chart");
+    ImGui::SeparatorText("Configured NR flow");
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("Configured stages only - not proof of applied output.");
+    ImGui::PopTextWrapPos();
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float width = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
     const float gap = ImGui::GetFontSize() * 1.5f;
@@ -106,7 +148,9 @@ inline void Draw(const View& view, Section& selected)
         { "Game effects + HUD", "Game rendering" },
         { "Prepare NR input", "HDR / paper white / " + std::to_string(view.scalePercent) + "%", (int) Section::Input },
         { "NR model", std::to_string(view.passes) + (view.passes == 1 ? " pass" : " passes"), (int) Section::Model },
-        { "Apply NR edit", view.applyModel ? "Strength / skin" : "Edit hidden; model runs", (int) Section::Blend },
+        { "Apply NR edit", view.applyModel ? std::string("Strength / skin\n") +
+                                                ReconstructionName(view.reconstruction.effective)
+                                          : "Configured edit hidden", (int) Section::Blend },
         { "Upscale NR edit", std::string("Separate ") + view.privateUpscaler + " pass (no RR)" },
         { "Game output", "FG / presentation" }
     };
@@ -194,12 +238,6 @@ inline void Draw(const View& view, Section& selected)
                                 : editable ? ImGuiCol_Button
                                            : ImGuiCol_FrameBg;
         auto fill = ImGui::GetStyleColorVec4(background);
-        if (label.section == (int) Section::Model)
-        {
-            // Preserve the theme's HDR brightness and interaction states, changing only the hue.
-            const float brightness = std::max({ fill.x, fill.y, fill.z });
-            fill = ImVec4(brightness * 0.20f, brightness * 0.65f, brightness * 0.30f, fill.w);
-        }
         draw->AddRectFilled(at, ImVec2(at.x + nodeWidth, at.y + height), ImGui::GetColorU32(fill),
                             ImGui::GetStyle().FrameRounding);
         const auto titleSize = ImGui::CalcTextSize(label.title, nullptr, false, wrapWidth);

@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "DlssNr_MenuSections.h"
 #include "DlssNr_Placement.h"
+#include "DlssNr_PipelineUi.h"
 #include <Config.h>
 #include <menu/menu_common.h>
 #include <algorithm>
@@ -69,22 +70,50 @@ void RenderInput(Config* config)
         HelpMarker("Downsampling filter for resolutions above 100%.");
     }
     {
-        const bool reduced = config->DlssNrWorkingScale.value_or_default() < 0.999f;
+        const float workScale = config->DlssNrWorkingScale.value_or_default();
+        const bool reduced = workScale < 0.999f;
+        const auto placement = ResolvePlacement(
+            config->DlssNrRunBeforeSr.value_or_default(), config->DlssNrDeferredDlss.value_or_default(),
+            config->DlssNrResidualAcrossRr.value_or_default(), config->DlssNrFinishedPicture.value_or_default());
 
         ImGui::BeginDisabled(!reduced);
 
-        static const char* enlargeNames[] = { "Classic", "Matched residual", "Matched residual + DLSS",
-                                             "Lighting + colour", "Lighting + colour + DLSS" };
-        int enlarge = (int) std::min(config->DlssNrTransfer.value_or_default(), 4u);
-
-        if (ImGui::Combo("Enlargement", &enlarge, enlargeNames, IM_ARRAYSIZE(enlargeNames)))
-            config->DlssNrTransfer = (uint32_t) enlarge;
+        const uint32_t requested = config->DlssNrTransfer.value_or_default();
+        if (ImGui::BeginCombo("Enlargement", PipelineUi::ReconstructionName(requested)))
+        {
+            for (uint32_t transfer = 0; transfer <= 4; ++transfer)
+            {
+                const bool selectable =
+                    PipelineUi::ReconstructionSelectable(transfer, placement.beforeUpscale, workScale);
+                ImGui::BeginDisabled(!selectable);
+                const bool selected = requested == transfer;
+                if (ImGui::Selectable(PipelineUi::ReconstructionName(transfer), selected))
+                    config->DlssNrTransfer = transfer;
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+                if (!selectable && reduced && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+                    ImGui::TextUnformatted("Private DLSS enlargement needs a post-upscale model route. "
+                                           "An existing request keeps its saved value and uses the spatial equivalent.");
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
+                ImGui::EndDisabled();
+            }
+            ImGui::EndCombo();
+        }
 
         ImGui::EndDisabled();
 
         HelpMarker("Below 100%: Lighting + colour resizes lighting gain and colour changes separately, then applies "
                    "them at full resolution. This can reduce resize halos; fully black pixels remain black. "
                    "DLSS modes require post-upscale DX12 processing.");
+        if (placement.beforeUpscale && reduced)
+            ImGui::TextWrapped("Private DLSS enlargement is unavailable for configured before-upscale model "
+                               "generation. Existing requests use their spatial equivalent without a failure "
+                               "or a saved-setting change.");
     }
     static const char* reversibleNames[] = { "Off (soft knee)", "Neutwo proxy + composed", "Neutwo proxy + replace",
                                              "Hybrid proxy + composed", "Hybrid proxy + replace" };

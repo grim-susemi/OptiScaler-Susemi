@@ -384,6 +384,12 @@ auto DlssNr_Dx12::State::DeferredSrContext::Before(ID3D12GraphicsCommandList* cm
         read(depth, inputStates.depth);
         read(motion, inputStates.motion);
         owner.Run(cmd, g.edited, depth, motion, g.edited, frame, queue);
+        // Run composed only the private edit, not the application's SR output.
+        // After owns final copy-back eligibility; submitting this scratch work
+        // (including a carrier saved for Present) must never publish applied.
+        owner.outputStatus.composed = false;
+        owner.outputStatus.copyBack = false;
+        owner.outputCommands = nullptr;
     }
     const bool evaluated = owner.nr.successfulDispatches != before;
     if (evaluated)
@@ -519,6 +525,11 @@ auto DlssNr_Dx12::State::DeferredSrContext::Before(ID3D12GraphicsCommandList* cm
         g.reset = true;
         Say("waiting for NR evaluation; clean SR frame retained");
     }
+    if (evaluated && !pending.cmd && owner.outputStatus.state != DlssNr::OutputState::Failed)
+    {
+        owner.outputStatus.state = DlssNr::OutputState::Failed;
+        owner.outputStatus.reason = DlssNr::OutputReason::Composition;
+    }
     owner.Barrier(cmd, g.edited, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                   D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 }
@@ -527,6 +538,12 @@ auto DlssNr_Dx12::State::DeferredSrContext::After(ID3D12GraphicsCommandList* cmd
 {
     const auto pair = pending;
     pending = {}; // Consume only the immediately matching successful upscale.
+    if (pair.cmd && owner.outputStatus.state != DlssNr::OutputState::Failed &&
+        !owner.outputStatus.hidden)
+    {
+        owner.outputStatus.state = DlssNr::OutputState::Skipped;
+        owner.outputStatus.reason = DlssNr::OutputReason::Resource;
+    }
     if (!current || current->failed || pair.cmd != cmd || pair.caller != source ||
         pair.output != owner.GetResource(source, NVSDK_NGX_Parameter_Output, "DLSSD.Output"))
     {
@@ -556,6 +573,8 @@ auto DlssNr_Dx12::State::DeferredSrContext::After(ID3D12GraphicsCommandList* cmd
     if (!g.upscaler->Evaluate(cmd, g.frame))
     {
         g.failed = true;
+        owner.outputStatus.state = DlssNr::OutputState::Failed;
+        owner.outputStatus.reason = DlssNr::OutputReason::Model;
         Say(std::string("private ") + g.upscaler->Name() +
             " evaluation failed: " + g.upscaler->Error() + "; clean SR frame retained");
         return;
@@ -571,7 +590,12 @@ auto DlssNr_Dx12::State::DeferredSrContext::After(ID3D12GraphicsCommandList* cmd
             DlssNr::FormatCanHoldLinearHdr(g.outputFormat);
         if (owner.late.CaptureResidual(cmd, pair.output, g.residualOutput, pair.scale, sceneLinear,
                                        UInt(source, NVSDK_NGX_Parameter_Reset) != 0))
+        {
+            owner.outputStatus.state = owner.outputStatus.hidden ? DlssNr::OutputState::EvaluatedHidden
+                                                                : DlssNr::OutputState::WaitingForModel;
+            owner.outputStatus.reason = DlssNr::OutputReason::None;
             Say(std::string("running: model -> private ") + g.upscaler->Name() + "; changes saved for the finished picture");
+        }
         else
         {
             g.reset = true;
@@ -603,6 +627,13 @@ auto DlssNr_Dx12::State::DeferredSrContext::After(ID3D12GraphicsCommandList* cmd
         DlssNr::CopyActiveColor(cmd, pair.output, g.composed, { g.outW, g.outH });
         owner.Barrier(cmd, pair.output, D3D12_RESOURCE_STATE_COPY_DEST, arrival);
         owner.Barrier(cmd, g.composed, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        owner.outputStatus.composed = true;
+        owner.outputStatus.copyBack = true;
+        owner.outputStatus.state = owner.outputStatus.hidden ? DlssNr::OutputState::EvaluatedHidden
+                                                            : DlssNr::OutputState::WaitingForModel;
+        owner.outputStatus.reason = DlssNr::OutputReason::None;
+        ID3D12CommandList* real = nullptr;
+        owner.outputCommands = Util::CheckForRealObject(__FUNCTION__, cmd, (IUnknown**) &real) ? real : cmd;
         Say("running: " + std::to_string(g.w) + "x" + std::to_string(g.h) +
             " contribution -> private " + g.upscaler->Name() + " -> " +
             std::to_string(g.outW) + "x" + std::to_string(g.outH) +
@@ -612,6 +643,8 @@ auto DlssNr_Dx12::State::DeferredSrContext::After(ID3D12GraphicsCommandList* cmd
     {
         owner.Barrier(cmd, pair.output, D3D12_RESOURCE_STATE_COPY_SOURCE, arrival);
         g.reset = true;
+        owner.outputStatus.state = DlssNr::OutputState::Failed;
+        owner.outputStatus.reason = DlssNr::OutputReason::Composition;
         Say("composition failed; clean frame retained");
     }
     owner.Barrier(cmd, g.clean, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,

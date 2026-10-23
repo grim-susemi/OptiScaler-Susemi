@@ -10,6 +10,7 @@
 
 #include <SimpleIni.h>
 #include <menu/Localization.h>
+#include <dlssnr/DlssNr_PlacementConfig.h>
 
 static CSimpleIniA ini;
 
@@ -370,15 +371,9 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             // --- DLSS 5 Neural Rendering (OptiScaler/dlssnr) ---
             DlssNrEnabled.set_from_config(readBool("DlssNr", "Enabled"));
-            auto nrBeforeSr = readBool("DlssNr", "RunBeforeSR");
-            if (!nrBeforeSr.has_value())
-                nrBeforeSr = readBool("DlssNr", "BeforeUpscale");
-            DlssNrRunBeforeSr.set_from_config(nrBeforeSr);
-            DlssNrFinishedPicture.set_from_config(readBool("DlssNr", "FinishedPicture"));
+            DlssNr::LoadPlacementConfig(*this, ini);
             DlssNrHdrTransfer.set_from_config(readBool("DlssNr", "HdrTransfer"));
-            DlssNrDeferredDlss.set_from_config(readBool("DlssNr", "DeferredDLSS"));
             DlssNrPrivateUpscaler.set_from_config(readInt("DlssNr", "PrivateUpscaler"));
-            DlssNrResidualAcrossRr.set_from_config(readBool("DlssNr", "ResidualAcrossRR"));
             DlssNrResidualAcrossRrBlend.set_from_config(readFloat("DlssNr", "ResidualAcrossRRBlend"));
             DlssNrToggleKey.set_from_config(readInt("DlssNr", "ToggleKey"));
             DlssNrTransferStrength.set_from_config(readFloat("DlssNr", "TransferStrength"));
@@ -1299,16 +1294,10 @@ bool Config::SaveIni(std::filesystem::path destination)
 
     // --- DLSS 5 Neural Rendering (OptiScaler/dlssnr) ---
     ini.SetValue("DlssNr", "Enabled", GetBoolValue(Instance()->DlssNrEnabled.value_for_config()).c_str());
-    ini.SetValue("DlssNr", "FinishedPicture", GetBoolValue(Instance()->DlssNrFinishedPicture.value_for_config()).c_str());
+    DlssNr::SavePlacementConfig(*Instance(), ini);
     ini.SetValue("DlssNr", "HdrTransfer", GetBoolValue(Instance()->DlssNrHdrTransfer.value_for_config()).c_str());
-    ini.SetValue("DlssNr", "RunBeforeSR",
-                 GetBoolValue(Instance()->DlssNrRunBeforeSr.value_for_config()).c_str());
-    ini.SetValue("DlssNr", "DeferredDLSS",
-                 GetBoolValue(Instance()->DlssNrDeferredDlss.value_for_config()).c_str());
     ini.SetValue("DlssNr", "PrivateUpscaler",
                  GetIntValue(Instance()->DlssNrPrivateUpscaler.value_for_config()).c_str());
-    ini.SetValue("DlssNr", "ResidualAcrossRR",
-                 GetBoolValue(Instance()->DlssNrResidualAcrossRr.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ResidualAcrossRRBlend",
                  GetFloatValue(Instance()->DlssNrResidualAcrossRrBlend.value_for_config()).c_str());
     ini.Delete("DlssNr", "ResidualFG");

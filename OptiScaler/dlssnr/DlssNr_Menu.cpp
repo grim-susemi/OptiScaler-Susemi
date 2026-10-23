@@ -51,30 +51,28 @@ static void RenderStatus(Config* config)
     const bool finishedPicture = config->DlssNrFinishedPicture.value_or_default();
     const auto dx12 = ReadStatus(Backend::Dx12);
     const auto vk = ReadStatus(Backend::Vulkan);
-    const bool vulkan = vk.running;
+    const auto feature = State::Instance().currentFeature;
+    const bool nativeVk = feature && feature->Api() == API::Vulkan && !feature->IsWithDx12();
+    const bool vulkan = nativeVk || vk.running;
+    const auto& status = vulkan ? vk : dx12;
+    const auto modelState = PipelineUi::ReadModelState(enabled, status);
 
     // An existing model handle does not mean NR is enabled this frame.
-    if (!enabled)
+    if (modelState == PipelineUi::ModelState::Disabled)
     {
         ImGui::TextDisabled("NR off.");
     }
-    else if (!dx12.running && !vulkan)
+    else if (modelState == PipelineUi::ModelState::Failed)
     {
-        const auto feature = State::Instance().currentFeature;
-        const bool nativeVk = feature && feature->Api() == API::Vulkan && !feature->IsWithDx12();
-        const auto& reason = nativeVk ? vk.failureReason : dx12.failureReason;
-
-        if (!reason.empty())
-        {
-            ImGui::TextWrapped("%s", reason.c_str());
-            ImGui::SameLine();
-
-            if (nativeVk)
-                ImGui::TextUnformatted("Restart the game to retry native Vulkan NR.");
-            else if (ImGui::SmallButton("Retry"))
-                DlssNr::RetryAfterFailure();
-        }
-        else if (feature && feature->Api() == API::DX11 && !feature->IsWithDx12())
+        ImGui::TextWrapped("NR failed: %s", status.failureReason.c_str());
+        if (nativeVk)
+            ImGui::TextWrapped("Restart the game to retry native Vulkan NR.");
+        else if (ImGui::SmallButton("Retry"))
+            DlssNr::RetryAfterFailure();
+    }
+    else if (modelState == PipelineUi::ModelState::Waiting)
+    {
+        if (feature && feature->Api() == API::DX11 && !feature->IsWithDx12())
         {
             ImGui::TextWrapped("NR needs the D3D12 bridge on D3D11. Choose an upscaler marked w/Dx12 and restart.");
         }
@@ -85,27 +83,23 @@ static void RenderStatus(Config* config)
             ImGui::TextWrapped("The private edit-upscale path requires DirectX 12 or its bridge. Disable separate edit upscaling to use native Vulkan NR.");
         }
         else
-            ImGui::TextUnformatted("Waiting for the upscaler to run.");
+            ImGui::TextWrapped("Waiting for model activity. The configured flow is not runtime confirmation.");
     }
     else
     {
-        const auto ms = vulkan ? vk.gpuTime : dx12.gpuTime;
+        const auto ms = status.gpuTime;
 
         // Hiding the edit keeps model evaluation running.
-        const char* runSuffix = !config->DlssNrApplyModel.value_or_default() ? "  (model running, edit hidden)" : "";
+        const char* runSuffix = !config->DlssNrApplyModel.value_or_default() ? "  (edit configured hidden)" : "";
 
-        // Keep the running indicator green, using the theme's HDR-adjusted text brightness.
-        const auto textColor = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-        ImGui::PushStyleColor(ImGuiCol_Text,
-                              ImVec4(textColor.x * 0.55f, textColor.y * 0.80f, textColor.z * 0.55f, textColor.w));
         if (ms.has_value())
-            ImGui::Text("Running%s - %.2f ms elapsed%s", vulkan ? " natively on Vulkan" : "", ms.value(), runSuffix);
+            ImGui::TextWrapped("Model activity%s: %.2f ms elapsed%s", vulkan ? " (native Vulkan)" : "",
+                               ms.value(), runSuffix);
         else if (vulkan)
             // Measured but not yet read: the first few frames are still in the query ring.
-            ImGui::Text("Running natively on Vulkan - %llu frames%s", vk.frames, runSuffix);
+            ImGui::TextWrapped("Model activity (native Vulkan): %llu frames%s", vk.frames, runSuffix);
         else
-            ImGui::Text("Running.%s", runSuffix);
-        ImGui::PopStyleColor();
+            ImGui::TextWrapped("Model activity reported.%s", runSuffix);
 
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
@@ -124,7 +118,46 @@ static void RenderStatus(Config* config)
                                                      : state.presentFrameTime;
             PipelineUi::DrawTimingBar(ms.value(), frameMs);
         }
+        ImGui::TextWrapped("Reported frame reconstruction: requested %s (%u); effective %s (%u).",
+                           PipelineUi::ReconstructionName(status.reconstruction.requested),
+                           status.reconstruction.requested,
+                           PipelineUi::ReconstructionName(status.reconstruction.effective),
+                           status.reconstruction.effective);
+        if (status.reconstruction.compatibilityFallback)
+            ImGui::TextWrapped("Compatibility fallback: spatial reconstruction, not an NR failure.");
     }
+    if (enabled && !vulkan)
+    {
+        const auto& output = status.output;
+        const char* result = output.Applied() ? "submitted"
+            : output.state == OutputState::EvaluatedHidden ? "evaluated, hidden"
+            : output.composed && !output.executed && output.state != OutputState::Failed
+                ? "composed, awaiting submission"
+            : output.state == OutputState::Failed ? "failed"
+            : output.state == OutputState::Skipped ? "skipped"
+            : output.state == OutputState::Capturing ? "capturing"
+            : output.state == OutputState::Disabled ? "disabled" : "waiting for model";
+        static constexpr const char* reasons[] = { "none", "input admission", "missing or unreadable resource",
+            "model", "composition", "final encode", "command-list Close", "queue Signal", "recording discarded" };
+        ImGui::TextWrapped("Output application: %s (%s).", result, reasons[(unsigned) output.reason]);
+        ImGui::TextWrapped("Runtime facts: evaluated %s; composed %s; copy-back %s; submitted %s.",
+            output.evaluated ? "yes" : "no", output.composed ? "yes" : "no",
+            output.copyBack ? "yes" : "no", output.submitted ? "yes" : "no");
+        ImGui::TextWrapped("Resolved creation/shader values: UI Correction %u; filter %u; signal %u.",
+            output.uiCorrection, output.inputFilter, output.signalEncoding);
+        const auto& requested = output.requested;
+        const auto& effective = output.effective;
+        ImGui::TextWrapped("Runtime route: requested %s; effective %s.",
+            requested.deferred ? "separate edit" : requested.finished ? "Present" : requested.beforeUpscale ? "Render" : "Upscaled",
+            effective.deferred ? "separate edit" : effective.finished ? "Present" : effective.beforeUpscale ? "Render" : "Upscaled");
+        ImGui::TextWrapped("Application %llu; generation %llu; capture %llu; guides %s; consumer %u.",
+            output.application, output.generation, output.captureSerial, output.guidesValid ? "valid" : "unavailable",
+            (unsigned) output.consumer);
+        if (output.completionUnknown)
+            ImGui::TextWrapped("GPU completion unknown; the output resources remain pinned.");
+    }
+    else if (enabled)
+        ImGui::TextWrapped("Output application: unconfirmed by current model telemetry.");
 }
 
 } // namespace DlssNr::MenuSections
@@ -158,6 +191,29 @@ void RenderMenu(Config* config, float menuResScale)
 
         const auto feature = State::Instance().currentFeature;
         const bool rayReconstruction = feature && feature->GetUpscalerType() == Upscaler::DLSSD;
+        static constexpr const char* directNames[] = { "Render", "Upscaled", "Present" };
+        const int direct = DirectPlacementIndex(
+            config->DlssNrRunBeforeSr.value_or_default(), config->DlssNrFinishedPicture.value_or_default(),
+            config->DlssNrDeferredDlss.value_or_default(), config->DlssNrResidualAcrossRr.value_or_default());
+        if (ImGui::BeginCombo("Direct placement", direct < 0 ? "Separate edit (retained)" : directNames[direct]))
+        {
+            for (int selection = 0; selection < 3; ++selection)
+                if (ImGui::Selectable(directNames[selection], selection == direct))
+                {
+                    SelectDirectPlacement(*config, selection);
+                    DlssNr::RetryAfterFailure();
+                }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+            ImGui::TextUnformatted("Choose a direct route explicitly. This clears separate-edit aliases; loading or "
+                                   "viewing an existing configuration does not migrate it.");
+            ImGui::PopTextWrapPos();
+            ImGui::EndTooltip();
+        }
         bool finished = config->DlssNrFinishedPicture.value_or_default();
         auto placement = ResolvePlacement(config->DlssNrRunBeforeSr.value_or_default(),
                                           config->DlssNrDeferredDlss.value_or_default(),
@@ -219,6 +275,9 @@ void RenderMenu(Config* config, float menuResScale)
         view.passes = config->DlssNrPasses.value_or_default();
         view.scalePercent = (int) lroundf(config->DlssNrWorkingScale.value_or_default() * 100.0f);
         view.rayReconstruction = rayReconstruction;
+        view.reconstruction = PipelineUi::ConfiguredReconstruction(
+            config->DlssNrTransfer.value_or_default(), placement.beforeUpscale,
+            config->DlssNrWorkingScale.value_or_default());
         if (finished)
             view.route = placement.deferred ? PipelineUi::Route::FinishedBefore : PipelineUi::Route::Finished;
         else if (placement.deferred)
@@ -227,6 +286,14 @@ void RenderMenu(Config* config, float menuResScale)
             view.route = placement.beforeUpscale ? PipelineUi::Route::Before : PipelineUi::Route::After;
 
         static PipelineUi::Section selected = PipelineUi::Section::Placement;
+        ImGui::TextWrapped("Configured reconstruction: requested %s (%u); effective %s (%u).",
+                           PipelineUi::ReconstructionName(view.reconstruction.requested),
+                           view.reconstruction.requested, PipelineUi::ReconstructionName(view.reconstruction.effective),
+                           view.reconstruction.effective);
+        if (view.reconstruction.compatibilityFallback)
+            ImGui::TextWrapped("Compatibility fallback (not a failure): before-upscale model generation uses "
+                               "the spatial equivalent. The saved private DLSS request is retained for a "
+                               "compatible post-upscale route.");
         ImGui::Separator();
         PipelineUi::Draw(view, selected);
         ImGui::Separator();

@@ -306,6 +306,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemDefinitionGroup>
   <PropertyGroup>
     <OptiScalerRtx40Mfg Condition="'$(OptiScalerRtx40Mfg)'==''">false</OptiScalerRtx40Mfg>
+    <OptiScalerNrSelfTest Condition="'$(OptiScalerNrSelfTest)'==''">false</OptiScalerNrSelfTest>
   </PropertyGroup>
   <PropertyGroup Condition="'$(OptiScalerRtx40Mfg)'=='true'">
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)-RTX40-MFG\</OutDir>
@@ -316,6 +317,39 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
       <PreprocessorDefinitions>OPTISCALER_RTX40_MFG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
+  <PropertyGroup Condition="'$(OptiScalerNrSelfTest)'=='true'">
+    <ConfigurationType>Application</ConfigurationType>
+    <TargetName>NRAddonHost</TargetName>
+    <TargetExt>.exe</TargetExt>
+    <OutDir>$(SolutionDir)$(Platform)\NRAddonHost-$(Configuration)-RTX40-MFG\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\NRAddonHost-$(Configuration)-RTX40-MFG\</IntDir>
+    <PreBuildEventUseInBuild>false</PreBuildEventUseInBuild>
+    <PostBuildEventUseInBuild>false</PostBuildEventUseInBuild>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(OptiScalerNrSelfTest)'=='true'">
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PreprocessorDefinitions>NDEBUG;_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR;_CONSOLE;OPTISCALER_NR_SELF_TEST;OPTISCALER_RTX40_MFG</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)include\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <LinkDLL>false</LinkDLL>
+      <ModuleDefinitionFile></ModuleDefinitionFile>
+      <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;freetype.lib;user32.lib;gdi32.lib;shell32.lib;imm32.lib;dwmapi.lib</AdditionalDependencies>
+      <DelayLoadDLLs></DelayLoadDLLs>
+      <AdditionalOptions></AdditionalOptions>
+    </Link>
+    <PreBuildEvent><Command></Command></PreBuildEvent>
+    <PostBuildEvent><Command></Command></PostBuildEvent>
+  </ItemDefinitionGroup>
+  <Target Name="ValidateNrSelfTestFlag" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(OptiScalerNrSelfTest)'!='true' and '$(OptiScalerNrSelfTest)'!='false'"
+           Text="OptiScalerNrSelfTest must be true or false." />
+    <Error Condition="'$(OptiScalerNrSelfTest)'=='true' and ('$(Platform)'!='x64' or '$(Configuration)'!='Release' or '$(OptiScalerRtx40Mfg)'!='true')"
+           Text="Early NRAddonHost requires Release x64 and OptiScalerRtx40Mfg=true." />
+  </Target>
   <Target Name="ValidateRtx40MfgFlag" BeforeTargets="PrepareForBuild">
     <Error Condition="'$(OptiScalerRtx40Mfg)'!='true' and '$(OptiScalerRtx40Mfg)'!='false'"
            Text="OptiScalerRtx40Mfg must be true or false." />
@@ -1001,5 +1035,16 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Evaluate.cpp" />
     <ClCompile Include="shaders\dlssnr\DlssNr_Dx12_Encode.cpp" />
     <ClInclude Include="shaders\dlssnr\DlssNr_Dx12_ModelState.h" />
+  </ItemGroup>
+  <!-- Early13.UiReady selects the actual production UI units. Runtime processing
+       units will be added to this same target when full Task13 is implemented.
+       No DLL entry, hook, live Config initialization or export unit is linked. -->
+  <ItemGroup Condition="'$(OptiScalerNrSelfTest)'=='true'">
+    <ClCompile Remove="@(ClCompile)" />
+    <ResourceCompile Remove="@(ResourceCompile)" />
+    <ClCompile Include="dlssnr\DlssNr_Menu.cpp;dlssnr\DlssNr_MenuControls.cpp;dlssnr\DlssNr_Status.cpp" />
+    <ClCompile Include="include\imgui\imgui.cpp;include\imgui\imgui_draw.cpp;include\imgui\imgui_tables.cpp;include\imgui\imgui_widgets.cpp;include\imgui\imgui_impl_win32.cpp;include\imgui\imgui_impl_dx11.cpp;include\imgui\misc\freetype\imgui_freetype.cpp" />
+    <ClCompile Include="..\tests\nr_addon_host\Main.cpp;..\tests\nr_addon_host\UiServices.cpp;..\tests\nr_addon_host\UiContracts.cpp" />
+    <ClInclude Include="..\tests\nr_addon_host\UiServices.h" />
   </ItemGroup>
 </Project>
