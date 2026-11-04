@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 사용법·설정 질문
+    url: https://github.com/grim-susemi/OptiScaler-Susemi/blob/dlss-neural-rendering/Config.md
+    about: 설정 항목 설명은 먼저 이 문서를 확인해 주세요.
+  - name: 공개 가이드 (DLSS5 NR)
+    url: https://grim-susemi.github.io/dlss5-nr-guide/
+    about: 설치·프리셋·문제 해결은 가이드에 정리되어 있습니다.

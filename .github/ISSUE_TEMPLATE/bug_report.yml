@@ -1,0 +1,78 @@
+name: 문제 제보 (Bug report)
+description: 모드가 안 되거나 화면이 깨질 때. 게임·빌드·GPU·로그를 적어주세요.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        제보 감사합니다. 아래 항목이 비어 있으면 원인을 좁히기 어렵습니다.
+        가능한 만큼만 채워 주세요.
+  - type: input
+    id: game
+    attributes:
+      label: 게임 / 버전
+      description: 예) Crimson Desert (Steam 최신), 다른 게임이면 이름과 버전
+      placeholder: "Crimson Desert / Steam 2026-11-xx"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU / 드라이버
+      description: 예) RTX 4090, NVIDIA 581.xx
+      placeholder: "RTX 4090 / 58x.xx"
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: 사용한 빌드
+      description: 릴리스 태그나 zip 이름, 커밋이면 앞 7자리
+      placeholder: "v0.1.1 / dlss-neural-rendering@abc1234"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 설치 방식
+      options:
+        - 릴리스 zip 압축 해제 후 수동 배치
+        - 설치 스크립트(install.bat / install.ps1)
+        - 직접 빌드
+        - 기타(본문에 설명)
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 증상
+      description: 무엇을 기대했고 실제로 무엇이 보였는지
+      placeholder: "기대: NR 필터가 적용됨 / 실제: 화면이 검게 나옴"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 순서
+      description: 1) 2) 3) 형태로
+      placeholder: "1) 게임 실행 2) OBS 소스 추가 3) 필터 적용"
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그·스크린샷
+      description: OBS 로그 경로나 붙여넣기. 스크린샷은 끌어다 놓으면 됩니다.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 확인
+      options:
+        - label: 최신 릴리스로도 같은 증상인지 확인했습니다
+          required: false
+        - label: 게임 파일을 수정하지 않는 설치(비파괴)로 시험했습니다
+          required: false
