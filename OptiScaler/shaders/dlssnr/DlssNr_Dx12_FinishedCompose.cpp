@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "DlssNr_Dx12_State.h"
 #include <dlssnr/DlssNr_StreamlinePicture.h>
+#include "DlssNr_FinishedPicture.h"
 
 bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue,
                                             const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts,
@@ -38,7 +39,9 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
     facts.ready = DlssNr::LateCaptureSelectable(slot.pending, slot.pinned, slot.submitted, slot.promisePending) &&
                   slot.guidesValid && slot.consumerOwner && slot.consumerDevice &&
                   DlssNr::StreamlinePicture::SameDevice(late.device.Get(), slot.consumerDevice.Get()) &&
-                  slot.frame.OutputWidth == desc.Width && slot.frame.OutputHeight == desc.Height &&
+                  slot.depth && slot.motion &&
+                  DlssNr::PrepareFinishedPicture(slot.frame,
+                      { desc, slot.depth->GetDesc(), slot.motion->GetDesc() }).has_value() &&
                   slot.fence && DlssNr::FinishedInputReady(facts.sameQueue, slot.fence->GetCompletedValue(), slot.ready);
     if (!claim)
         return true;
@@ -168,6 +171,15 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     if (!latest)
         return false; // loading screen, another swapchain, or this real frame was already consumed
     auto& slot = *latest;
+    auto finishedFrame = slot.frame;
+    if (!slot.residualOnly && !legacyBridge)
+    {
+        const auto prepared = DlssNr::PrepareFinishedPicture(
+            slot.frame, { desc, slot.depth->GetDesc(), slot.motion->GetDesc() });
+        if (!prepared)
+            return false;
+        finishedFrame = *prepared;
+    }
     const bool holdFinished = slot.residualOnly && Config::Instance()->DlssNrHoldFrame.value_or_default() &&
                               inputHold.active;
     if (!holdFinished)
@@ -351,7 +363,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     }
     else
     {
-        auto frame = slot.frame;
+        auto frame = finishedFrame;
         frame.ColourIsLinearHdr = pq || scrgb;
         // Absolute display encodings: 203-nit reference white, in 80-nit scRGB units.
         frame.WhitePointOverride = (pq || scrgb) ? 203.0f / 80.0f : 0.0f;
