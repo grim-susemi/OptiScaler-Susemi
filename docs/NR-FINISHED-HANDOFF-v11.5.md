@@ -1,4 +1,4 @@
-# NR finished-picture handoff: v11.5
+# NR finished-picture handoff: v11.5.1
 
 ## Source and preserved features
 
@@ -27,14 +27,20 @@ or a fabricated capture extent.
 
 ## Application identity and lifetime
 
+The earlier v11.5 release remains an unpublished draft, with its tag retained. A release-time production
+regression exposed mutation of the original capture identity. v11.5.1 preserves
+that source identity, derives a consumer identity only in returned admission facts,
+and uses it consistently for claim, model epoch and output status. A queried but
+unclaimed serial cannot be restamped forward into later consumer applications.
+
 The Dawnwalker precedent used `9a1c81da` together with historical uncommitted
 changes. Its successful `eab3ee53` binary does not prove that the patch commit
 alone reproduces that binary.
 
-v11.5 keeps exact application matches first. Only a unique, selectable capture
+v11.5.1 keeps exact application matches first. Only a unique, selectable capture
 exactly one application behind may be learned, after three consecutive distinct
 consumer applications. Duplicate queries do not advance learning. Query then
-claim of the restamped serial keeps that learned phase.
+claim of the same real serial keeps that learned phase without altering the capture.
 
 Learning belongs to the existing mutex-protected `LateContext`, never a
 process-static variable. It resets on owner/consumer/generation changes,
@@ -48,15 +54,16 @@ The existing claimed-application/serial, readiness and fence checks still apply.
 The CPU fixture compiles the actual production admission and apply bodies,
 the actual `LateContext` member declaration and `Cancel()` body, and the actual
 capture-reset statements. It invokes the real extent and phase helpers.
-Ten seeded defects must fail at their intended assertion: admission bypass,
+Twelve seeded defects must fail at their intended assertion: admission bypass,
 MV scaling, source mutation, aspect/bounds bypass, unused prepared frame,
-process-global learning and missing cancellation/capture reset.
+process-global learning, missing cancellation/capture reset, capture-identity mutation
+and incorrect model consumer epoch.
 
 Packaging reads committed blobs while preserving unchanged archive members.
 All Windows BATs use CRLF. The extracted-package E2E checks that transport
 before executing the actual installer, including fresh/no-op/upgrade/removal.
 
-| Game / evidence | Earlier observed result | Unified v11.5 |
+| Game / evidence | Earlier observed result | Unified v11.5.1 |
 | --- | --- | --- |
 | Black Flag Resynced, `43c9b3dd` | Owner confirmed visible NR; observed APPLY continued after feature recreation | Extent and identity CPU regressions passed; new integrated binary not game-tested |
 | Dawnwalker, historical `eab3ee53` | Separate lag1 repair reported working | Scoped phase/claim/reset regressions passed; new integrated binary not game-tested |

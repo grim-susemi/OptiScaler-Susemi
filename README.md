@@ -8,7 +8,7 @@
 
 # OptiScaler Susemi Edition
 
-v11.5 integrates the current Susemi features and installer with finished-picture
+v11.5.1 integrates the current Susemi features and installer with finished-picture
 NR extent/MV adaptation and owner-scoped application-phase repair.
 
 [![Latest release](https://img.shields.io/badge/Download-latest-green?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)
@@ -22,7 +22,7 @@ NR extent/MV adaptation and owner-scoped application-phase repair.
 
 ## <a id="susemi-oneclick"></a>One-click installer (recommended)
 
-Download **OptiScaler-NR-v11.5.zip** from the [latest release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest).
+Download **OptiScaler-NR-v11.5.1.zip** from the [latest release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest).
 Extract the complete ZIP into its own folder, close the game, then run
 `Install_OptiScaler_windows.bat`. Select Korean or English and the actual x64 game
 EXE, read the diagnosis, consent, then check for `setup_verified=11`.
@@ -48,7 +48,7 @@ explicit game destination, and user-supplied NR model guidance.
 ## <a id="susemi-download"></a>Download
 
 - [Latest release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest):
-  **OptiScaler-NR-v11.5.zip** and **SHA256SUMS.txt**, one package for both languages.
+  **OptiScaler-NR-v11.5.1.zip** and **SHA256SUMS.txt**, one package for both languages.
 - [Cause, production tests and three-game matrix](docs/NR-FINISHED-HANDOFF-v11.5.md).
 - Earlier releases remain available as historical versions.
 
@@ -64,7 +64,7 @@ an already installed ASI and assume this updates it.
 Production CPU extent/guide/MV, exact-first phase/claim/owner/reset and defect
 detection regressions pass. Earlier Black Flag visible NR success (`43c9b3dd`)
 and Dawnwalker lag1 success (`eab3ee53`) are separate historical builds.
-The new integrated v11.5 binary has not been game-tested. Same-size Crimson Desert
+The new integrated v11.5.1 binary has not been game-tested. Same-size Crimson Desert
 coverage here is an offline regression; ghosting/depth/MV quality is not newly
 accepted. Existing working game installations were not changed for publishing.
 

@@ -13,11 +13,33 @@ static bool LagQuery(Fixture& f, uint64_t application)
 static void WarmLag(Fixture& f)
 {
     Expect(!LagQuery(f,100) && !LagQuery(f,101) && LagQuery(f,102), "NR_LAG_THREE_FRAMES");
+    Expect(f.state.late.slots[0].identity.application==101, "NR_LAG_IMMUTABLE_CAPTURE");
     DlssNr::XeFGCapture facts;
     Expect(f.Admit(facts,true), "NR_LAG_CLAIM");
 }
 static void LagCases()
 {
+    {
+        Fixture f;
+        WarmLag(f);
+        Expect(LagQuery(f,103), "NR_LAG_UNCLAIMED_READY");
+        auto& slot=f.state.late.slots[0];
+        Expect(slot.identity.application==102, "NR_LAG_IMMUTABLE_CAPTURE");
+        DlssNr::XeFGCapture facts;
+        Expect(f.Admit(facts) && facts.identity.application==103, "NR_LAG_EFFECTIVE_CONSUMER");
+        const auto& pictureIdentity=facts.identity;
+        const bool legacyBridge=false;
+        const uint64_t epoch=0;
+        DlssNrFrameInfo frame;
+#include "finished_consumer_epoch.inc"
+        Expect(frame.SubmissionEpoch==103, "NR_LAG_MODEL_EPOCH");
+        struct { uint64_t application=0, generation=0; } outputStatus;
+#include "finished_consumer_status.inc"
+        Expect(outputStatus.application==103 && outputStatus.generation==f.consumer.generation,
+               "NR_LAG_STATUS_CONSUMER");
+        f.consumer.application=104;
+        Expect(!f.Admit(facts) || !facts.ready, "NR_LAG_NO_STALE_SERIAL_RESTAMP");
+    }
     {
         Fixture f;
         Expect(!LagQuery(f,100), "NR_LAG_INITIAL");
@@ -61,9 +83,9 @@ static void LagCases()
         WarmLag(f);
         LagQuery(f,103);
         auto& slot=f.state.late.slots[0];
-        slot.identity.application=102;
         auto& extra=f.state.late.slots[1];
         extra=slot;
+        extra.identity.application=102;
         ++extra.serial;
         DlssNr::XeFGCapture facts;
         Expect(!f.Admit(facts), "NR_LAG_AMBIGUITY");

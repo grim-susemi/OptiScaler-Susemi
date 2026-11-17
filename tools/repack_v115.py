@@ -1,4 +1,4 @@
-"""Repack the verified v11.4 layout with committed v11.5 sources and one built core."""
+"""Repack the verified v11.4 layout with committed v11.5.1 sources and one built core."""
 
 import argparse
 import hashlib
@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Final
 
 BASE_SHA: Final = "d26fcfa69736ea06a1be3f42657f6ee5da4df1284e10adc69d84f6acd4eed759"
-CORE_SHA: Final = "e050434cd054ebe0ea43882ff60c2f96755fcc9396fcdd7f709649967469feef"
-NAME: Final = "OptiScaler-NR-v11.5.zip"
+CORE_SHA: Final = "7c81b53205d8f6742181415464015060f0fe7d849e399050483b8da210a04a55"
+NAME: Final = "OptiScaler-NR-v11.5.1.zip"
 SOURCES: Final = (
     "Install_OptiScaler_windows.bat",
     "INSTALL-ONECLICK.md",
@@ -60,13 +60,13 @@ def main() -> None:
             "Commit the validated source before packaging")
     require(sha(base.read_bytes()) == BASE_SHA, "Wrong v11.4 base archive")
     core = core_path.read_bytes()
-    require(sha(core) == CORE_SHA, "Wrong unified v11.5 core")
+    require(sha(core) == CORE_SHA, "Wrong unified v11.5.1 core")
     pe = struct.unpack_from("<I", core, 0x3C)[0]
     require(core[:2] == b"MZ" and core[pe:pe + 4] == b"PE\0\0"
             and struct.unpack_from("<H", core, pe + 4)[0] == 0x8664,
             "Core must be an x64 PE")
-    require(b"v11.5-unified-lag-extent" in core
-            or "v11.5-unified-lag-extent".encode("utf-16le") in core,
+    require(b"v11.5.1-unified-lag-extent" in core
+            or "v11.5.1-unified-lag-extent".encode("utf-16le") in core,
             "Release build marker missing")
 
     with zipfile.ZipFile(base) as archive:
@@ -87,12 +87,12 @@ def main() -> None:
     require(CORE_SHA.encode() in payload["tools/susemi_installer.ps1"],
             "Installer core pin differs from the built artifact")
     payload["RELEASE-MANIFEST.json"] = (json.dumps({
-        "version": "v11.5",
+        "version": "v11.5.1",
         "repository": "https://github.com/grim-susemi/OptiScaler-Susemi",
         "source_commit": revision,
         "base_archive_sha256": BASE_SHA,
         "core_sha256": CORE_SHA,
-        "core_build_label": "v11.5-unified-lag-extent",
+        "core_build_label": "v11.5.1-unified-lag-extent",
         "integrated_gpu_gameplay_tested": False,
         "nvidia_model_binaries_bundled": False,
         "windows_batch_line_endings": "CRLF",

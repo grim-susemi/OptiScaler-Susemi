@@ -4,8 +4,8 @@
 #include "DlssNr_FinishedPicture.h"
 
 bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue,
-                                            const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts,
-                                            bool claim, uint64_t captureSerial)
+                                              const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts,
+                                              bool claim, uint64_t captureSerial)
 {
     facts = {};
     late.lag.Enter(&shader, consumer);
@@ -21,15 +21,16 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
     if (!Util::CheckForRealObject(__FUNCTION__, queue, (IUnknown**) &realQueue))
         realQueue = queue;
     LateContext::Slot* newest = nullptr;
+    bool learnedLag = false;
     for (auto& slot : late.slots)
         if (slot.pending && !slot.residualOnly && slot.identity.owner == &shader &&
             slot.identity.SameConsumer(consumer) &&
-            (!consumer.applicationKnown || (slot.identity.applicationKnown &&
-                                            slot.identity.application == consumer.application)) &&
+            (!consumer.applicationKnown ||
+             (slot.identity.applicationKnown && slot.identity.application == consumer.application)) &&
             (!newest || slot.serial > newest->serial))
             newest = &slot;
     if (newest)
-        late.lag.Exact(newest->serial);
+        late.lag.Reset();
     else if (consumer.applicationKnown && consumer.application > 0)
     {
         LateContext::Slot* lagged = nullptr;
@@ -43,8 +44,7 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
                 ++matches;
             }
         if (matches == 1 && lagged->guidesValid &&
-            DlssNr::LateCaptureSelectable(lagged->pending, lagged->pinned,
-                                         lagged->submitted, lagged->promisePending))
+            DlssNr::LateCaptureSelectable(lagged->pending, lagged->pinned, lagged->submitted, lagged->promisePending))
         {
             const bool learning = !late.lag.locked;
             if (late.lag.Observe(consumer.application, lagged->serial))
@@ -53,7 +53,7 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
                     LOG_INFO("DLSS-NR finished application phase: consumer={} producer={} serial={} learned_lag=1",
                              consumer.application, lagged->identity.application, lagged->serial);
                 newest = lagged;
-                newest->identity.application = consumer.application;
+                learnedLag = true;
             }
         }
         else
@@ -66,34 +66,39 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
     facts.exists = true;
     facts.serial = slot.serial;
     facts.identity = slot.identity;
+    // A clock-domain mapping belongs to this admission, never to the capture.
+    if (learnedLag)
+        facts.identity.application = consumer.application;
     facts.submitted = DlssNr::LateCaptureEnqueued(slot.submitted, slot.promisePending);
     facts.sameQueue = facts.submitted && slot.producerQueue.Get() == realQueue;
     facts.ready = DlssNr::LateCaptureSelectable(slot.pending, slot.pinned, slot.submitted, slot.promisePending) &&
                   slot.guidesValid && slot.consumerOwner && slot.consumerDevice &&
-                  DlssNr::StreamlinePicture::SameDevice(late.device.Get(), slot.consumerDevice.Get()) &&
-                  slot.depth && slot.motion &&
-                  DlssNr::PrepareFinishedPicture(slot.frame,
-                      { desc, slot.depth->GetDesc(), slot.motion->GetDesc() }).has_value() &&
-                  slot.fence && DlssNr::FinishedInputReady(facts.sameQueue, slot.fence->GetCompletedValue(), slot.ready);
+                  DlssNr::StreamlinePicture::SameDevice(late.device.Get(), slot.consumerDevice.Get()) && slot.depth &&
+                  slot.motion &&
+                  DlssNr::PrepareFinishedPicture(slot.frame, { desc, slot.depth->GetDesc(), slot.motion->GetDesc() })
+                      .has_value() &&
+                  slot.fence &&
+                  DlssNr::FinishedInputReady(facts.sameQueue, slot.fence->GetCompletedValue(), slot.ready);
     if (!claim)
         return true;
     // Closing presentation eligibility never resolves producer/GPU ownership.
     for (auto& other : late.slots)
         if (other.pending && other.identity.SameConsumer(slot.identity) && other.serial <= slot.serial)
             DlssNr::ClearLateSlotSelection(other.pending);
-    if (!facts.ready || (captureSerial && (captureSerial != slot.serial ||
-        consumer.owner != slot.identity.owner || consumer.application != slot.identity.application)) ||
-        (late.claimed.owner == slot.identity.owner && late.claimed.SameConsumer(slot.identity) &&
-         (slot.identity.application <= late.claimed.application || slot.serial <= late.claimedSerial)))
+    if (!facts.ready ||
+        (captureSerial && (captureSerial != slot.serial || consumer.owner != facts.identity.owner ||
+                           consumer.application != facts.identity.application)) ||
+        (late.claimed.owner == facts.identity.owner && late.claimed.SameConsumer(facts.identity) &&
+         (facts.identity.application <= late.claimed.application || slot.serial <= late.claimedSerial)))
         return false;
-    late.claimed = slot.identity;
+    late.claimed = facts.identity;
     late.claimedSerial = slot.serial;
     return true;
 }
 
-auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE colorSpace,
-                                          bool gameFrameHandoff, const DlssNr::FinishedIdentity& consumer,
-                                          uint64_t captureSerial) -> bool
+auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12CommandQueue* queue,
+                                            DXGI_COLOR_SPACE_TYPE colorSpace, bool gameFrameHandoff,
+                                            const DlssNr::FinishedIdentity& consumer, uint64_t captureSerial) -> bool
 {
     modelFacts.ValidateCurrent(DlssNr::Backend::Dx12, consumer);
     outputStatus.ResetOutcome();
@@ -103,7 +108,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     outputStatus.generation = consumer.Known() ? consumer.generation : 0;
     const auto& requested = *Config::Instance();
     outputStatus.requested = DlssNr::ResolvePlacement(requested.DlssNrRunBeforeSr.value_or_default(),
-        requested.DlssNrDeferredDlss.value_or_default(), requested.DlssNrResidualAcrossRr.value_or_default(), true);
+                                                      requested.DlssNrDeferredDlss.value_or_default(),
+                                                      requested.DlssNrResidualAcrossRr.value_or_default(), true);
     outputStatus.effective = outputStatus.requested;
     outputStatus.consumer = DlssNr::CurrentFinishedConsumer();
     outputStatus.hidden = !requested.DlssNrApplyModel.value_or_default();
@@ -140,15 +146,16 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     LateContext::Slot* newest = nullptr;
     const auto epoch = ::State::Instance().frameCount;
     const auto& cfg = *Config::Instance();
-    const bool residualOnly = DlssNr::ResolvePlacement(
-        cfg.DlssNrRunBeforeSr.value_or_default(), cfg.DlssNrDeferredDlss.value_or_default(),
-        cfg.DlssNrResidualAcrossRr.value_or_default(), true).deferred;
+    const bool residualOnly =
+        DlssNr::ResolvePlacement(cfg.DlssNrRunBeforeSr.value_or_default(), cfg.DlssNrDeferredDlss.value_or_default(),
+                                 cfg.DlssNrResidualAcrossRr.value_or_default(), true)
+            .deferred;
     const bool legacyBridge = ::State::Instance().swapchainApi == API::DX11 ||
                               ::State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
     LateContext::Slot* latest = nullptr;
+    DlssNr::XeFGCapture facts;
     if (!residualOnly && !legacyBridge)
     {
-        DlssNr::XeFGCapture facts;
         if (!AdmitFinishedCapture(color, queue, consumer, facts, true, captureSerial))
             return false;
         for (auto& slot : late.slots)
@@ -157,66 +164,67 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     }
     else
     {
-    for (auto& slot : late.slots)
-    {
-        // Candidate filter = picture identity only (pending + placement/extent). Eligibility
-        // is never a prefilter: a pinned or unresolved newest capture must win the serial
-        // identity and then refuse the frame, not let an older capture be substituted.
-        if (!slot.pending)
-            continue;
-        // Native FG's internal Present counter includes generated frames and is not an app-frame identity.
-        if (!gameFrameHandoff && (epoch < slot.frame.SubmissionEpoch || epoch - slot.frame.SubmissionEpoch > 1))
+        for (auto& slot : late.slots)
         {
-            slot.pending = false;
-            late.reset = true;
-            continue;
+            // Candidate filter = picture identity only (pending + placement/extent). Eligibility
+            // is never a prefilter: a pinned or unresolved newest capture must win the serial
+            // identity and then refuse the frame, not let an older capture be substituted.
+            if (!slot.pending)
+                continue;
+            // Native FG's internal Present counter includes generated frames and is not an app-frame identity.
+            if (!gameFrameHandoff && (epoch < slot.frame.SubmissionEpoch || epoch - slot.frame.SubmissionEpoch > 1))
+            {
+                slot.pending = false;
+                late.reset = true;
+                continue;
+            }
+            if (slot.residualOnly != residualOnly || slot.frame.OutputWidth != desc.Width ||
+                slot.frame.OutputHeight != desc.Height)
+                continue;
+            if (selection.Consider(slot.serial, DlssNr::LateCaptureSelectable(slot.pending, slot.pinned, slot.submitted,
+                                                                              slot.promisePending)))
+                newest = &slot;
         }
-        if (slot.residualOnly != residualOnly || slot.frame.OutputWidth != desc.Width ||
-            slot.frame.OutputHeight != desc.Height)
-            continue;
-        if (selection.Consider(slot.serial,
-                               DlssNr::LateCaptureSelectable(slot.pending, slot.pinned, slot.submitted,
-                                                             slot.promisePending)))
-            newest = &slot;
-    }
-    if (DlssNr::LateCompositionRefuses(selection))
-        return false; // the newest capture exists but is unusable: refuse, never the held edit
-    if (selection.have)
-    {
-        // A queued producer signal can depend on this presentation, regardless of FG provider.
-        if (!DlssNr::FinishedInputReady(newest->producerQueue.Get() == realQueue,
-                                        newest->fence->GetCompletedValue(), newest->ready))
-            return false; // the newest capture is not ready: refuse, never substitute an older one
-        latest = newest;
-    }
-    // A tuning change may need a few model warm-up frames. Keep displaying the last
-    // held edit in that gap rather than exposing live/rotating game backbuffers - but only
-    // when no capture matches this picture at all (an existing but unusable capture refuses
-    // above and is never replaced by the held edit either).
-    if (DlssNr::LateCompositionMayUseHeld(selection) && residualOnly && Config::Instance()->DlssNrHoldFrame.value_or_default() && inputHold.active &&
-        late.heldValid && late.heldGeneration == inputHold.generation && late.heldSlot &&
-        late.heldSlot->serial == late.heldSlotSerial && !late.heldSlot->pending &&
-        late.heldSlot->frame.OutputWidth == desc.Width && late.heldSlot->frame.OutputHeight == desc.Height)
-    {
-        auto& held = *late.heldSlot;
-        if (late.Finished(held))
-            latest = &held;
-    }
+        if (DlssNr::LateCompositionRefuses(selection))
+            return false; // the newest capture exists but is unusable: refuse, never the held edit
+        if (selection.have)
+        {
+            // A queued producer signal can depend on this presentation, regardless of FG provider.
+            if (!DlssNr::FinishedInputReady(newest->producerQueue.Get() == realQueue,
+                                            newest->fence->GetCompletedValue(), newest->ready))
+                return false; // the newest capture is not ready: refuse, never substitute an older one
+            latest = newest;
+        }
+        // A tuning change may need a few model warm-up frames. Keep displaying the last
+        // held edit in that gap rather than exposing live/rotating game backbuffers - but only
+        // when no capture matches this picture at all (an existing but unusable capture refuses
+        // above and is never replaced by the held edit either).
+        if (DlssNr::LateCompositionMayUseHeld(selection) && residualOnly &&
+            Config::Instance()->DlssNrHoldFrame.value_or_default() && inputHold.active && late.heldValid &&
+            late.heldGeneration == inputHold.generation && late.heldSlot &&
+            late.heldSlot->serial == late.heldSlotSerial && !late.heldSlot->pending &&
+            late.heldSlot->frame.OutputWidth == desc.Width && late.heldSlot->frame.OutputHeight == desc.Height)
+        {
+            auto& held = *late.heldSlot;
+            if (late.Finished(held))
+                latest = &held;
+        }
     }
     if (!latest)
         return false; // loading screen, another swapchain, or this real frame was already consumed
     auto& slot = *latest;
+    const auto& pictureIdentity = (!residualOnly && !legacyBridge) ? facts.identity : slot.identity;
     auto finishedFrame = slot.frame;
     if (!slot.residualOnly && !legacyBridge)
     {
-        const auto prepared = DlssNr::PrepareFinishedPicture(
-            slot.frame, { desc, slot.depth->GetDesc(), slot.motion->GetDesc() });
+        const auto prepared =
+            DlssNr::PrepareFinishedPicture(slot.frame, { desc, slot.depth->GetDesc(), slot.motion->GetDesc() });
         if (!prepared)
             return false;
         finishedFrame = *prepared;
     }
-    const bool holdFinished = slot.residualOnly && Config::Instance()->DlssNrHoldFrame.value_or_default() &&
-                              inputHold.active;
+    const bool holdFinished =
+        slot.residualOnly && Config::Instance()->DlssNrHoldFrame.value_or_default() && inputHold.active;
     if (!holdFinished)
         late.heldValid = false;
     if (holdFinished)
@@ -226,7 +234,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         if (late.heldFinished && !SameHoldShape(late.heldFinished->GetDesc(), desc))
         {
             // Defer replacement rather than blocking a presentation needed by the old work.
-            if (late.heldFence && !DlssNr::FinishedInputReady(false, late.heldFence->GetCompletedValue(), late.heldReady))
+            if (late.heldFence &&
+                !DlssNr::FinishedInputReady(false, late.heldFence->GetCompletedValue(), late.heldReady))
                 return false;
             late.heldFinished.Reset();
             late.heldValid = false;
@@ -237,7 +246,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             late.heldState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
         }
         if (late.heldFence && !DlssNr::FinishedInputReady(late.heldQueue.Get() == realQueue,
-                                                        late.heldFence->GetCompletedValue(), late.heldReady))
+                                                          late.heldFence->GetCompletedValue(), late.heldReady))
             return false;
         if (!late.heldFinished)
         {
@@ -251,8 +260,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             (residualOnly || legacyBridge || other.identity.SameConsumer(slot.identity)))
             other.pending = false;
     // The selected input is complete or ordered before composition on this queue.
-    if (FAILED(slot.allocator->Reset()) ||
-        FAILED(slot.commands->Reset(slot.allocator.Get(), nullptr)))
+    if (FAILED(slot.allocator->Reset()) || FAILED(slot.commands->Reset(slot.allocator.Get(), nullptr)))
     {
         late.reset = true;
         late.Say("Could not prepare the finished picture.");
@@ -261,8 +269,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     auto* cmd = slot.commands.Get();
     if (holdFinished)
     {
-        const bool capture = !late.heldValid || late.heldGeneration != inputHold.generation ||
-                             late.heldSpace != colorSpace;
+        const bool capture =
+            !late.heldValid || late.heldGeneration != inputHold.generation || late.heldSpace != colorSpace;
         if (capture)
         {
             Barrier(cmd, color, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_SOURCE);
@@ -323,8 +331,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
                 {
                     if (!curve)
                     {
-                        curve.Attach(CreateScratch(late.device.Get(), DXGI_FORMAT_R32G32B32A32_FLOAT,
-                                                   kDlssNrHdrCurveBins, 1));
+                        curve.Attach(
+                            CreateScratch(late.device.Get(), DXGI_FORMAT_R32G32B32A32_FLOAT, kDlssNrHdrCurveBins, 1));
                         if (curve)
                             Barrier(cmd, curve.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -403,11 +411,9 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         // Absolute display encodings: 203-nit reference white, in 80-nit scRGB units.
         frame.WhitePointOverride = (pq || scrgb) ? 203.0f / 80.0f : 0.0f;
         frame.Reset |= late.reset;
-        frame.SubmissionEpoch = legacyBridge ? epoch : slot.identity.application;
-        Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        frame.SubmissionEpoch = legacyBridge ? epoch : pictureIdentity.application;
+        Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         ID3D12Resource* nrColor = color;
         bool colorReady = true;
         DlssNrConstants conversion {};
@@ -417,8 +423,8 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         {
             auto ensure = [&](LateContext::ComPtr<ID3D12Resource>& resource, DXGI_FORMAT format)
             {
-                if (resource && (resource->GetDesc().Width != desc.Width ||
-                                 resource->GetDesc().Height != desc.Height || resource->GetDesc().Format != format))
+                if (resource && (resource->GetDesc().Width != desc.Width || resource->GetDesc().Height != desc.Height ||
+                                 resource->GetDesc().Format != format))
                     resource.Reset();
                 if (!resource)
                     resource.Attach(CreateScratch(late.device.Get(), format, (unsigned) desc.Width, desc.Height));
@@ -427,12 +433,10 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             colorReady = ensure(slot.linear, DXGI_FORMAT_R16G16B16A16_FLOAT) && ensure(slot.encoded, desc.Format);
             if (colorReady)
             {
-                Barrier(cmd, color, D3D12_RESOURCE_STATE_PRESENT,
-                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                Barrier(cmd, color, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 colorReady = shader.DispatchResidualPass(cmd, conversion, color, nullptr, nullptr, nullptr,
                                                          slot.linear.Get(), true);
-                Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_PRESENT);
+                Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PRESENT);
                 // Dispatch reads the converted colour; its transition out of UAV orders the conversion.
                 nrColor = slot.linear.Get();
                 frame.OutputArrivalState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -453,12 +457,10 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             {
                 Barrier(cmd, slot.encoded.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                         D3D12_RESOURCE_STATE_COPY_SOURCE);
-                Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                        D3D12_RESOURCE_STATE_COPY_DEST);
+                Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
                 cmd->CopyResource(color, slot.encoded.Get());
                 finalCopyBack = true;
-                Barrier(cmd, color, D3D12_RESOURCE_STATE_COPY_DEST,
-                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                Barrier(cmd, color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 Barrier(cmd, slot.encoded.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             }
@@ -476,13 +478,11 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
             outputStatus.state = DlssNr::OutputState::Failed;
             outputStatus.reason = DlssNr::OutputReason::FinalEncode;
         }
-        Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_COPY_DEST);
-        Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_COPY_DEST);
+        Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
     }
-    outputStatus.application = slot.identity.application;
-    outputStatus.generation = slot.identity.generation;
+    outputStatus.application = pictureIdentity.application;
+    outputStatus.generation = pictureIdentity.generation;
     outputStatus.captureSerial = slot.serial;
     outputStatus.consumer = DlssNr::CurrentFinishedConsumer();
     outputStatus.guidesValid = slot.guidesValid;
@@ -530,8 +530,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
         late.heldSlot = &slot;
         late.heldSlotSerial = slot.serial;
     }
-    const bool ran = finalCopyBack && !outputStatus.hidden &&
-                     outputStatus.state != DlssNr::OutputState::Failed;
+    const bool ran = finalCopyBack && !outputStatus.hidden && outputStatus.state != DlssNr::OutputState::Failed;
     if (ran)
     {
         outputStatus.state = DlssNr::OutputState::Submitted;
@@ -547,17 +546,20 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     // frame. Final transport failure still requests a fresh history.
     late.reset = outputStatus.state == DlssNr::OutputState::Failed ||
                  (slot.residualOnly ? !appliedResidual : !outputStatus.composed);
-    late.Say(outputStatus.state == DlssNr::OutputState::Failed        ? "NR final output failed."
-             : outputStatus.hidden                                   ? "NR changes are hidden."
-             : ran                                                    ? (slot.residualOnly
-                                                                             ? (matchedResponse
-                                                                                    ? "Applying pre-SR changes with HDR brightness matching (local fallback enabled)."
-                                                                                    : "Applying the pre-SR changes to the finished picture.")
-                                                                             : "Applying NR to the finished picture.")
-                                                                      : "Preparing NR for the finished picture.");
+    late.Say(outputStatus.state == DlssNr::OutputState::Failed ? "NR final output failed."
+             : outputStatus.hidden                             ? "NR changes are hidden."
+             : ran                                             ? (slot.residualOnly
+                                                                      ? (matchedResponse
+                                                                             ? "Applying pre-SR changes with HDR brightness matching (local fallback enabled)."
+                                                                             : "Applying the pre-SR changes to the finished picture.")
+                                                                      : "Applying NR to the finished picture.")
+                                                               : "Preparing NR for the finished picture.");
     if (ran && (++late.successes == 1 || late.successes % 300 == 0))
-        LOG_INFO("DLSS-NR finished picture: {} frames, {}x{}, OptiScaler FG {}, same producer queue {}, game-frame handoff {}", late.successes, desc.Width, desc.Height,
+        LOG_INFO("DLSS-NR finished picture: {} frames, {}x{}, OptiScaler FG {}, same producer queue {}, game-frame "
+                 "handoff {}",
+                 late.successes, desc.Width, desc.Height,
                  ::State::Instance().currentFG && ::State::Instance().currentFG->IsActive() &&
-                     !::State::Instance().currentFG->IsPaused(), slot.producerQueue.Get() == realQueue, gameFrameHandoff);
+                     !::State::Instance().currentFG->IsPaused(),
+                 slot.producerQueue.Get() == realQueue, gameFrameHandoff);
     return ran;
 }

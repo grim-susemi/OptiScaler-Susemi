@@ -6,7 +6,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$NEW = 'e050434cd054ebe0ea43882ff60c2f96755fcc9396fcdd7f709649967469feef'
+$NEW = '7c81b53205d8f6742181415464015060f0fe7d849e399050483b8da210a04a55'
 $OLD = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
 $UAL = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
 if (Test-Path -LiteralPath $Work) { throw 'Use a new private fixture directory' }
@@ -92,7 +92,7 @@ foreach ($ps in (Get-ChildItem -LiteralPath "$package\tools" -Filter '*.ps1')) {
   Record ('parse-' + $ps.Name) ($parseErrors.Count -eq 0) 'PowerShell parse only; no runtime download'
 }
 $manifest=Get-Content -LiteralPath "$package\RELEASE-MANIFEST.json" -Raw | ConvertFrom-Json
-Record 'source-binding' ($manifest.version -eq 'v11.5' -and $manifest.source_commit -match '^[0-9a-f]{40}$' -and
+Record 'source-binding' ($manifest.version -eq 'v11.5.1' -and $manifest.source_commit -match '^[0-9a-f]{40}$' -and
   $manifest.core_sha256 -eq $NEW -and $manifest.integrated_gpu_gameplay_tested -eq $false) $manifest.source_commit
 
 $exe=NewGame 'fresh'; $dir=Split-Path -Parent $exe; $before=MapGame $dir

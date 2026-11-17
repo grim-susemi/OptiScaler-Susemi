@@ -45,17 +45,13 @@
 #include "DlssNr_ResidualPair.h"
 #include "../output_scaling/OS_Dx12.h"
 
-
 using DlssNr::Profiles::PassSettings;
-
 
 struct DlssNr_Dx12::State
 {
 
     // NGX result names for diagnostics.
     const char* NgxResultName(unsigned int r);
-
-
 
     using NrState = DlssNr::Detail::ModelStateDx12;
     NrState nr;
@@ -81,9 +77,10 @@ struct DlssNr_Dx12::State
     DlssNrReconstruction reconstruction;
     void ReleaseEnlarger();
     void CollectEnlargers();
-    ID3D12Resource* EnlargeMatchedResidual(ID3D12GraphicsCommandList* cmd, ID3D12Device* device,
-        ID3D12Resource* proxy, ID3D12Resource* answer, ID3D12Resource* depth, ID3D12Resource* motion,
-        const DlssNrFrameInfo& frame, const DlssNrConstants& resolve, bool reset, ID3D12CommandQueue* queue);
+    ID3D12Resource* EnlargeMatchedResidual(ID3D12GraphicsCommandList* cmd, ID3D12Device* device, ID3D12Resource* proxy,
+                                           ID3D12Resource* answer, ID3D12Resource* depth, ID3D12Resource* motion,
+                                           const DlssNrFrameInfo& frame, const DlssNrConstants& resolve, bool reset,
+                                           ID3D12CommandQueue* queue);
 
     // What the pass costs on the GPU, for the breakdown in the overlay.
     std::unique_ptr<DlssNrGpuTime> gpuTime;
@@ -114,12 +111,10 @@ struct DlssNr_Dx12::State
             ID3D12Resource* frozen = nullptr;
             D3D12_RESOURCE_DESC desc {};
         };
-        std::array<Texture, 4> textures {{
-            { NVSDK_NGX_Parameter_Color, "DLSSD.Color" },
-            { NVSDK_NGX_Parameter_Depth, "DLSSD.Depth" },
-            { NVSDK_NGX_Parameter_MotionVectors, "DLSSD.MotionVectors" },
-            { NVSDK_NGX_Parameter_ExposureTexture, "DLSSD.ExposureTexture" }
-        }};
+        std::array<Texture, 4> textures { { { NVSDK_NGX_Parameter_Color, "DLSSD.Color" },
+                                            { NVSDK_NGX_Parameter_Depth, "DLSSD.Depth" },
+                                            { NVSDK_NGX_Parameter_MotionVectors, "DLSSD.MotionVectors" },
+                                            { NVSDK_NGX_Parameter_ExposureTexture, "DLSSD.ExposureTexture" } } };
         NrHoldParameters_Dx12 parameters;
         D3D12_RESOURCE_DESC outputDesc {};
         bool active = false;
@@ -239,7 +234,8 @@ struct DlssNr_Dx12::State
                     if (r)
                         r->Release();
                 for (auto* r : accumulatedEdit)
-                    if (r) r->Release();
+                    if (r)
+                        r->Release();
                 if (queries)
                     queries->Release();
                 if (queue)
@@ -304,7 +300,6 @@ struct DlssNr_Dx12::State
         void ReleaseResources();
     };
     DeferredSrContext deferredSr { *this };
-
 
     struct LateContext
     {
@@ -403,15 +398,14 @@ struct DlssNr_Dx12::State
 
     DXGI_COLOR_SPACE_TYPE FinishedColorSpace(IDXGISwapChain* swapchain, DXGI_FORMAT format);
 
-
     void ApplyToFinishedPictureDx11(IDXGISwapChain* swapchain);
 
     bool ApplyFinishedColor(ID3D12Resource* color, ID3D12CommandQueue* queue, DXGI_COLOR_SPACE_TYPE colorSpace,
                             bool gameFrameHandoff = false, const DlssNr::FinishedIdentity& consumer = {},
                             uint64_t captureSerial = 0);
     bool AdmitFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue,
-                              const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts,
-                              bool claim, uint64_t captureSerial = 0);
+                              const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts, bool claim,
+                              uint64_t captureSerial = 0);
 
     // XeFG owned application-frame handoff (todo 10), under the owner mutex: the pending
     // capture facts for a finished application picture (the same selection predicate as
@@ -422,9 +416,8 @@ struct DlssNr_Dx12::State
                                 DlssNr::XeFGCapture& facts, const DlssNr::FinishedIdentity& consumer = {});
     void CloseFinishedCaptures(uint64_t throughSerial, const DlssNr::FinishedIdentity& consumer = {});
 
-    bool PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID3D12Device* device,
-                          const DlssNrFrameInfo& frame, const D3D12_RESOURCE_DESC& desc,
-                          DlssNr::ColorExtent native, DlssNr::ColorExtent work,
+    bool PrepareRunModels(ID3D12GraphicsCommandList* cmdList, ID3D12Device* device, const DlssNrFrameInfo& frame,
+                          const D3D12_RESOURCE_DESC& desc, DlssNr::ColorExtent native, DlssNr::ColorExtent work,
                           float workScale, unsigned int requestedPasses);
     struct EncodeContext
     {

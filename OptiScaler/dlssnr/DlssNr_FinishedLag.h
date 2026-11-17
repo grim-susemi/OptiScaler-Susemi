@@ -7,7 +7,7 @@ namespace DlssNr
 struct FinishedLag1
 {
     FinishedIdentity scope {};
-    uint64_t application = 0, serial = 0, restamped = 0;
+    uint64_t application = 0, serial = 0;
     unsigned streak = 0;
     bool locked = false;
 
@@ -28,17 +28,6 @@ struct FinishedLag1
         }
     }
 
-    void Exact(uint64_t matchedSerial)
-    {
-        // A second query/claim of the slot just restamped must retain the learned phase.
-        if (matchedSerial != restamped)
-        {
-            application = serial = restamped = 0;
-            streak = 0;
-            locked = false;
-        }
-    }
-
     bool Observe(uint64_t nextApplication, uint64_t nextSerial)
     {
         if (application == nextApplication)
@@ -50,14 +39,12 @@ struct FinishedLag1
             }
             return locked;
         }
-        const bool consecutive = application && nextApplication == application + 1;
+        const bool consecutive = application && nextApplication == application + 1 && nextSerial > serial;
         streak = consecutive ? (streak < 3 ? streak + 1 : 3) : 1;
         application = nextApplication;
         serial = nextSerial;
         locked = streak >= 3;
-        if (locked)
-            restamped = nextSerial;
         return locked;
     }
 };
-}
+} // namespace DlssNr

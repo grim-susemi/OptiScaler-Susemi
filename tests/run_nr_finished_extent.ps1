@@ -33,6 +33,12 @@ $resetStart = $late.IndexOf('    frame.Reset = gameReset != 0;')
 $resetEnd = $late.IndexOf('    params->Get(NVSDK_NGX_Parameter_FrameTimeDeltaInMsec', $resetStart)
 $captureReset = $late.Substring($resetStart, $resetEnd - $resetStart)
 $frameUse = '        auto frame = finishedFrame;'
+$epochUse = 'frame.SubmissionEpoch = legacyBridge ? epoch : pictureIdentity.application;'
+$statusUse = "outputStatus.application = pictureIdentity.application;`noutputStatus.generation = pictureIdentity.generation;"
+foreach ($statement in @($epochUse, 'outputStatus.application = pictureIdentity.application;',
+    'outputStatus.generation = pictureIdentity.generation;')) {
+    if (($source.Split(@($statement), [StringSplitOptions]::None).Count - 1) -ne 1) { throw 'Production consumer identity wiring missing' }
+}
 if (($source.Split(@($frameUse), [StringSplitOptions]::None).Count - 1) -ne 1) { throw 'Actual Run frame selection missing' }
 $variants = @(
     @{ tag='green'; from=''; to=''; marker='' },
@@ -49,19 +55,27 @@ $variants = @(
     @{ tag='seed-bounds'; from='(!wanted.width || region.width == wanted.width)'; to='true'; marker='BF_EXTENT_MOTION_BOUNDS' },
     @{ tag='seed-global'; from='DlssNr::FinishedLag1 lag;'; to='inline static DlssNr::FinishedLag1 lag;'; marker='NR_LAG_OWNER_ISOLATION' },
     @{ tag='seed-cancel'; from='    lag.Reset();'; to='    (void)lag;'; marker='NR_LAG_CANCEL' },
-    @{ tag='seed-capture-reset'; from='if (frame.Reset)'; to='if (false)'; marker='NR_LAG_CAPTURE_RESET' }
+    @{ tag='seed-capture-reset'; from='if (frame.Reset)'; to='if (false)'; marker='NR_LAG_CAPTURE_RESET' },
+    @{ tag='seed-source-identity'; from='facts.identity.application = consumer.application;';
+       to='facts.identity.application = slot.identity.application = consumer.application;'; marker='NR_LAG_IMMUTABLE_CAPTURE' },
+    @{ tag='seed-source-epoch'; from=$epochUse;
+       to='frame.SubmissionEpoch = legacyBridge ? epoch : slot.identity.application;'; marker='NR_LAG_MODEL_EPOCH' }
 )
 foreach ($variant in $variants) {
     $dir = Join-Path $out $variant.tag
     New-Item -ItemType Directory -Path "$dir/shaders/dlssnr" -Force | Out-Null
     $h = $header; $a = $apply; $f = $frameUse
     $m = $member; $c = $cancel; $r = $captureReset
+    $d = $admission
+    $e = $epochUse
     if ($variant.tag -ne 'green') {
         if ($variant.tag -eq 'seed-apply') { $text = $a }
         elseif ($variant.tag -eq 'seed-frame-use') { $text = $f }
         elseif ($variant.tag -eq 'seed-global') { $text = $m }
         elseif ($variant.tag -eq 'seed-cancel') { $text = $c }
         elseif ($variant.tag -eq 'seed-capture-reset') { $text = $r }
+        elseif ($variant.tag -eq 'seed-source-identity') { $text = $d }
+        elseif ($variant.tag -eq 'seed-source-epoch') { $text = $e }
         else { $text = $h }
         if (($text.Split(@($variant.from), [StringSplitOptions]::None).Count - 1) -ne 1) { throw "Seed anchor drift: $($variant.tag)" }
         $text = $text.Replace($variant.from, $variant.to)
@@ -70,15 +84,19 @@ foreach ($variant in $variants) {
         elseif ($variant.tag -eq 'seed-global') { $m = $text }
         elseif ($variant.tag -eq 'seed-cancel') { $c = $text }
         elseif ($variant.tag -eq 'seed-capture-reset') { $r = $text }
+        elseif ($variant.tag -eq 'seed-source-identity') { $d = $text }
+        elseif ($variant.tag -eq 'seed-source-epoch') { $e = $text }
         else { $h = $text }
     }
     Set-Content -LiteralPath "$dir/shaders/dlssnr/DlssNr_FinishedPicture.h" -Value $h -Encoding ascii
-    Set-Content -LiteralPath "$dir/finished_admission.inc" -Value $admission -Encoding ascii
+    Set-Content -LiteralPath "$dir/finished_admission.inc" -Value $d -Encoding ascii
     Set-Content -LiteralPath "$dir/finished_apply_prepare.inc" -Value $a -Encoding ascii
     Set-Content -LiteralPath "$dir/finished_apply_frame.inc" -Value $f -Encoding ascii
     Set-Content -LiteralPath "$dir/finished_lag_member.inc" -Value $m -Encoding ascii
     Set-Content -LiteralPath "$dir/finished_cancel.inc" -Value $c -Encoding ascii
     Set-Content -LiteralPath "$dir/finished_capture_reset.inc" -Value $r -Encoding ascii
+    Set-Content -LiteralPath "$dir/finished_consumer_epoch.inc" -Value $e -Encoding ascii
+    Set-Content -LiteralPath "$dir/finished_consumer_status.inc" -Value $statusUse -Encoding ascii
     $exe = "$dir/extent.exe"
     # Keep the project's /W4 smoke policy: Common.h intentionally pads its
     # alignas(256) ABI constant buffer (existing C4324, retained in the raw log).
@@ -94,5 +112,5 @@ foreach ($variant in $variants) {
         throw "Seed did not fail as intended: $($variant.tag)"
     }
 }
-Write-Host 'BF_EXTENT_RESULT exit=0 positive=passed mutations=10/10 gpu=false'
+Write-Host 'BF_EXTENT_RESULT exit=0 positive=passed mutations=12/12 gpu=false'
 exit 0

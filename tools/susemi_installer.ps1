@@ -1014,7 +1014,7 @@ function Invoke-InteractiveSession {
 
 $Rc2ZipSha     = '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a'
 $CoreEntryName = 'OptiScaler.dll'
-$CoreSha       = 'e050434cd054ebe0ea43882ff60c2f96755fcc9396fcdd7f709649967469feef'
+$CoreSha       = '7c81b53205d8f6742181415464015060f0fe7d849e399050483b8da210a04a55'
 $Rc2CoreSha    = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'  # core inside the legacy rc2 ZIP (SUSEMI_RC2_ZIP mode only)
 $UalStagedRel  = 'tools\asi-loader\Ultimate-ASI-Loader-x64.dll'
 $UalSha        = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'

@@ -17,8 +17,8 @@ struct FinishedPictureResources
 // Run already samples independent guide regions onto its actual colour/output extent.
 // Preserve the SR metadata selecting those regions; only convert vector units from
 // SR-output pixels to finished-picture pixels before Run's existing work-size scaling.
-inline std::optional<DlssNrFrameInfo> PrepareFinishedPicture(
-    const DlssNrFrameInfo& captured, const FinishedPictureResources& resources)
+inline std::optional<DlssNrFrameInfo> PrepareFinishedPicture(const DlssNrFrameInfo& captured,
+                                                             const FinishedPictureResources& resources)
 {
     const auto texture = [](const D3D12_RESOURCE_DESC& desc)
     {
@@ -40,17 +40,16 @@ inline std::optional<DlssNrFrameInfo> PrepareFinishedPicture(
     const auto fits = [](const D3D12_RESOURCE_DESC& desc, const GuideRegion& region, GuideExtent wanted)
     {
         return region.valid() && (!wanted.width || region.width == wanted.width) &&
-               (!wanted.height || region.height == wanted.height) &&
-               uint64_t(region.x) + region.width <= desc.Width &&
+               (!wanted.height || region.height == wanted.height) && uint64_t(region.x) + region.width <= desc.Width &&
                uint64_t(region.y) + region.height <= desc.Height;
     };
     const GuideExtent render { captured.RenderSubrectWidth, captured.RenderSubrectHeight };
     const GuideExtent output { captured.OutputWidth, captured.OutputHeight };
-    const auto guides = ResolveGuideRegions(
-        { uint32_t(resources.depth.Width), resources.depth.Height },
-        { uint32_t(resources.motion.Width), resources.motion.Height }, render, output,
-        captured.MotionVectorsLowResolution, captured.DepthSubrectBaseX, captured.DepthSubrectBaseY,
-        captured.MotionSubrectBaseX, captured.MotionSubrectBaseY);
+    const auto guides =
+        ResolveGuideRegions({ uint32_t(resources.depth.Width), resources.depth.Height },
+                            { uint32_t(resources.motion.Width), resources.motion.Height }, render, output,
+                            captured.MotionVectorsLowResolution, captured.DepthSubrectBaseX, captured.DepthSubrectBaseY,
+                            captured.MotionSubrectBaseX, captured.MotionSubrectBaseY);
     if (!fits(resources.depth, guides.depth, render) ||
         !fits(resources.motion, guides.motion, captured.MotionVectorsLowResolution ? render : output))
         return std::nullopt;
@@ -60,9 +59,9 @@ inline std::optional<DlssNrFrameInfo> PrepareFinishedPicture(
         prepared.MvScaleX *= float(width) / captured.OutputWidth;
         prepared.MvScaleY *= float(height) / captured.OutputHeight;
     }
-    if (!std::isfinite(prepared.MvScaleX) || !std::isfinite(prepared.MvScaleY) ||
-        prepared.MvScaleX == 0 || prepared.MvScaleY == 0)
+    if (!std::isfinite(prepared.MvScaleX) || !std::isfinite(prepared.MvScaleY) || prepared.MvScaleX == 0 ||
+        prepared.MvScaleY == 0)
         return std::nullopt;
     return prepared;
 }
-}
+} // namespace DlssNr
