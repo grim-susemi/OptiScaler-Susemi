@@ -1,17 +1,18 @@
 <div align="center">
   <img src="images/susemi-title.svg" alt="OptiScaler Susemi Edition" width="800" />
   <br />
-  <sub>Personal fork — Korean UI · MFG unlock · 20/30-series FG bundle</sub>
+  <sub>Susemi Edition — Korean/English UI · NR · MFG · one-click installer</sub>
 </div>
 <br />
 <div align="center">
 
 # OptiScaler Susemi Edition
 
-Korean UI + MFG unlock + 20/30-series FG bundle. Grab the latest below.
+v11.5 integrates the current Susemi features and installer with finished-picture
+NR extent/MV adaptation and owner-scoped application-phase repair.
 
 [![Latest release](https://img.shields.io/badge/Download-latest-green?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)
-[![One-click installer](https://img.shields.io/badge/One--click-Installer-blueviolet?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a2)
+[![One-click installer](https://img.shields.io/badge/One--click-Installer-blueviolet?style=for-the-badge&logo=github&logoColor=white)](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest)
 [![Total downloads](https://img.shields.io/github/downloads/grim-susemi/OptiScaler-Susemi/total?style=for-the-badge&logo=github&logoColor=white&label=Total%20downloads)](https://github.com/grim-susemi/OptiScaler-Susemi/releases)
 
 </div>
@@ -21,37 +22,58 @@ Korean UI + MFG unlock + 20/30-series FG bundle. Grab the latest below.
 
 ## <a id="susemi-oneclick"></a>One-click installer (recommended)
 
-Extract the complete installer ZIP into its own folder, close the game, then run `Install_OptiScaler_windows.bat`. Pick the actual x64 game EXE, read the diagnosis and preview, consent, then check the result.
-The a2 installer verifies core/UAL plus nine bundled Intel/AMD/DirectX DLLs. It keeps the existing core; it isn't stable-core promotion or proof of working FG.
+Download **OptiScaler-NR-v11.5.zip** from the [latest release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest).
+Extract the complete ZIP into its own folder, close the game, then run
+`Install_OptiScaler_windows.bat`. Select Korean or English and the actual x64 game
+EXE, read the diagnosis, consent, then check for `setup_verified=11`.
+The installer verifies the new pinned core, UAL and nine bundled Intel/AMD/DirectX
+DLLs. It preserves existing user INI/FG settings; NR is not automatically enabled.
 Removal checks the install record and preserves user changes; conflicts stop it rather than forcing deletion. ReShade configuration changes need separate consent and an eligible installer-owned INI.
 NVIDIA DLSS/FG/NR/Streamline binaries and models aren't bundled or automatically acquired by this installer. The NR model (`nvngx_dlssnr.dll`) and ReShade stay user-supplied.
-The unified guide ships in the same package: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md). The bat ships with the one-click installer release, [v11.3-installer-a2](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a2), see [Download](#susemi-download).
+The unified [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md) ships in the same ZIP.
+It includes install, upgrade/removal, optional official runtime download with an
+explicit game destination, and user-supplied NR model guidance.
 
 ## <a id="susemi-diff"></a>What's changed in this fork
 
 - **Korean UI** — overlay + tooltips in Korean, per-key **Unbind** button
+- **Current NR UI** — localized/resizable menu, NR addon options and current model metadata from v11.4
 - **MFG unlock** — frame-generation ratio unlock for 40-series cards. Fail-closed + active indicator
 - **NR 200% restored** — neural rendering 200% model + D3D12 inspection hold
-- **20/30-series FG bundle** — DLSS / Streamline / FG files bundled in the zip, extract and go
+- **Finished-picture NR repair** — validates real extents/guides and adapts MV scale; exact frame matches remain first
+- **Scoped phase learning** — observed lag1 only; reset on owner/consumer/generation and capture cancellation, with no process-global lag assumption
+- **Runtime boundary** — no NVIDIA/NR model or historical SM75/SM86 MFG payload is redistributed; use the supplied official-source helper or your own permitted model
 - **Language-unified package** — one download serves both Korean and English
 
 ## <a id="susemi-download"></a>Download
 
-- Recommended: [latest release page](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest) — points at the newest stable (currently v11.1)
-- Latest prerelease: [v11.2-rc2](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.2-rc2). Candidate scope and limits are in [`docs/RELEASE-v11.2-rc2.md`](docs/RELEASE-v11.2-rc2.md).
-- One-click installer: [v11.3-installer-a2 release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/tag/v11.3-installer-a2), one unified ZIP for all languages; guide: [INSTALL-ONECLICK.md](INSTALL-ONECLICK.md)
+- [Latest release](https://github.com/grim-susemi/OptiScaler-Susemi/releases/latest):
+  **OptiScaler-NR-v11.5.zip** and **SHA256SUMS.txt**, one package for both languages.
+- [Cause, production tests and three-game matrix](docs/NR-FINISHED-HANDOFF-v11.5.md).
+- Earlier releases remain available as historical versions.
 
 ## <a id="susemi-install"></a>Install
 
 **One-click first (recommended):** run `Install_OptiScaler_windows.bat` from the package root. One session covers language selection, game EXE selection, diagnosis, preview, consent, apply and the result.
 
-Advanced / legacy (`setup_windows.bat` flow, or the manual zip steps):
+Use the bundled guide for advanced routes. Do not put an additional proxy beside
+an already installed ASI and assume this updates it.
 
-1. Extract the zip **next to the game exe**
-2. Check `OptiScaler.ini` — e.g. `[DLSSG] AdaMfgUnlock`, follow the comments for your card
-3. Rename `OptiScaler.dll` to **`dxgi.dll`** (Vulkan-only games: whichever of `winmm.dll` / `version.dll` the game loads)
+### Validation
 
-Full order follows the bundled guide [`dist/README.md`](dist/README.md).
+Production CPU extent/guide/MV, exact-first phase/claim/owner/reset and defect
+detection regressions pass. Earlier Black Flag visible NR success (`43c9b3dd`)
+and Dawnwalker lag1 success (`eab3ee53`) are separate historical builds.
+The new integrated v11.5 binary has not been game-tested. Same-size Crimson Desert
+coverage here is an offline regression; ghosting/depth/MV quality is not newly
+accepted. Existing working game installations were not changed for publishing.
+
+### 한국어 요약
+
+최신 ZIP을 별도 폴더에 전부 풀고 `Install_OptiScaler_windows.bat`를 실행하세요.
+v11.4 기능·UI·설치기를 유지하면서 NR 크기/MV와 프레임 인계를 함께 고쳤습니다.
+NR 모델은 직접 준비해야 합니다. 통합판의 CPU 회귀는 통과했으며 새 DLL의
+실기·화질 검증은 아직입니다. 기존 블랙플래그 성공판을 자동 교체하지 않습니다.
 
 ## <a id="susemi-notes"></a>Notes
 

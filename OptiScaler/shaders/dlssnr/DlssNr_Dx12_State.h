@@ -28,6 +28,7 @@
 #include "DlssNr_SeamClock.h"
 #include "DlssNr_LateSlot.h"
 #include <dlssnr/DlssNr_FinishedConsumer.h>
+#include <dlssnr/DlssNr_FinishedLag.h>
 
 #include <Config.h>
 #include <State.h>
@@ -361,6 +362,7 @@ struct DlssNr_Dx12::State
         ComPtr<IUnknown> consumerOwner;
         ComPtr<ID3D12Device> consumerDevice;
         uint64_t claimedSerial = 0;
+        DlssNr::FinishedLag1 lag;
         std::string status = "Waiting for a finished picture.";
         bool reset = true;
         std::atomic<bool> tracking { false };

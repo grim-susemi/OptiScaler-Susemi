@@ -1,12 +1,14 @@
 #include "pch.h"
 #include "DlssNr_Dx12_State.h"
 #include <dlssnr/DlssNr_StreamlinePicture.h>
+#include "DlssNr_FinishedPicture.h"
 
 bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12CommandQueue* queue,
                                             const DlssNr::FinishedIdentity& consumer, DlssNr::XeFGCapture& facts,
                                             bool claim, uint64_t captureSerial)
 {
     facts = {};
+    late.lag.Enter(&shader, consumer);
     if (!color || !queue || !consumer.Known() || !late.device)
         return false;
     LateContext::ComPtr<ID3D12Device> queueDevice, pictureDevice;
@@ -26,6 +28,37 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
                                             slot.identity.application == consumer.application)) &&
             (!newest || slot.serial > newest->serial))
             newest = &slot;
+    if (newest)
+        late.lag.Exact(newest->serial);
+    else if (consumer.applicationKnown && consumer.application > 0)
+    {
+        LateContext::Slot* lagged = nullptr;
+        unsigned matches = 0;
+        for (auto& candidate : late.slots)
+            if (candidate.pending && !candidate.residualOnly && candidate.identity.owner == &shader &&
+                candidate.identity.SameConsumer(consumer) && candidate.identity.applicationKnown &&
+                candidate.identity.application == consumer.application - 1)
+            {
+                lagged = &candidate;
+                ++matches;
+            }
+        if (matches == 1 && lagged->guidesValid &&
+            DlssNr::LateCaptureSelectable(lagged->pending, lagged->pinned,
+                                         lagged->submitted, lagged->promisePending))
+        {
+            const bool learning = !late.lag.locked;
+            if (late.lag.Observe(consumer.application, lagged->serial))
+            {
+                if (learning)
+                    LOG_INFO("DLSS-NR finished application phase: consumer={} producer={} serial={} learned_lag=1",
+                             consumer.application, lagged->identity.application, lagged->serial);
+                newest = lagged;
+                newest->identity.application = consumer.application;
+            }
+        }
+        else
+            late.lag.Reset();
+    }
     if (!newest)
         return false;
     auto& slot = *newest;
@@ -38,7 +71,9 @@ bool DlssNr_Dx12::State::AdmitFinishedCapture(ID3D12Resource* color, ID3D12Comma
     facts.ready = DlssNr::LateCaptureSelectable(slot.pending, slot.pinned, slot.submitted, slot.promisePending) &&
                   slot.guidesValid && slot.consumerOwner && slot.consumerDevice &&
                   DlssNr::StreamlinePicture::SameDevice(late.device.Get(), slot.consumerDevice.Get()) &&
-                  slot.frame.OutputWidth == desc.Width && slot.frame.OutputHeight == desc.Height &&
+                  slot.depth && slot.motion &&
+                  DlssNr::PrepareFinishedPicture(slot.frame,
+                      { desc, slot.depth->GetDesc(), slot.motion->GetDesc() }).has_value() &&
                   slot.fence && DlssNr::FinishedInputReady(facts.sameQueue, slot.fence->GetCompletedValue(), slot.ready);
     if (!claim)
         return true;
@@ -171,6 +206,15 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     if (!latest)
         return false; // loading screen, another swapchain, or this real frame was already consumed
     auto& slot = *latest;
+    auto finishedFrame = slot.frame;
+    if (!slot.residualOnly && !legacyBridge)
+    {
+        const auto prepared = DlssNr::PrepareFinishedPicture(
+            slot.frame, { desc, slot.depth->GetDesc(), slot.motion->GetDesc() });
+        if (!prepared)
+            return false;
+        finishedFrame = *prepared;
+    }
     const bool holdFinished = slot.residualOnly && Config::Instance()->DlssNrHoldFrame.value_or_default() &&
                               inputHold.active;
     if (!holdFinished)
@@ -354,7 +398,7 @@ auto DlssNr_Dx12::State::ApplyFinishedColor(ID3D12Resource* color, ID3D12Command
     }
     else
     {
-        auto frame = slot.frame;
+        auto frame = finishedFrame;
         frame.ColourIsLinearHdr = pq || scrgb;
         // Absolute display encodings: 203-nit reference white, in 80-nit scRGB units.
         frame.WhitePointOverride = (pq || scrgb) ? 203.0f / 80.0f : 0.0f;

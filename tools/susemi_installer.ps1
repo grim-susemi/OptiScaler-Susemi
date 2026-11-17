@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   susemi_installer.ps1 - one-entry coordinator for the guided installer
@@ -348,6 +348,7 @@ function Get-DiagnosisContext {
   $UAL_SHA = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
   $OPT_SHA = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'
   $OPT_SHA_NEW = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
+  $OPT_SHA_CURRENT = $CoreSha
   $reshadeIniExists = Test-Path -LiteralPath (Join-Path $exeDir 'ReShade.ini')
   $reshadeDirExists = Test-Path -LiteralPath (Join-Path $exeDir 'reshade-shaders')
   $ctx.reshadeIniExists = $reshadeIniExists; $ctx.reshadeDirExists = $reshadeDirExists
@@ -362,7 +363,7 @@ function Get-DiagnosisContext {
       $prod = [string]$vi.ProductName
     } catch {}
     if (($sha -eq $UAL_SHA) -or ($orig -ieq 'Ultimate-ASI-Loader-x64.dll')) { $ualNames += @($f.Name) }
-    elseif (($sha -eq $OPT_SHA) -or ($sha -eq $OPT_SHA_NEW) -or ($orig -ieq 'OptiScaler.dll')) { $optiNames += @($f.Name) }
+    elseif (($sha -eq $OPT_SHA) -or ($sha -eq $OPT_SHA_NEW) -or ($sha -eq $OPT_SHA_CURRENT) -or ($orig -ieq 'OptiScaler.dll')) { $optiNames += @($f.Name) }
     elseif ($orig -like '*ReShade*' -or $prod -like '*ReShade*') { $reshadeNames += @($f.Name) }
     elseif (((($reshadeIniExists) -or ($reshadeDirExists)) -and ($f.Name -ieq 'ReShade.asi')) -and ($(Get-PeValid $f.FullName))) { $reshadeNames += @($f.Name) }
   }
@@ -1013,7 +1014,7 @@ function Invoke-InteractiveSession {
 
 $Rc2ZipSha     = '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a'
 $CoreEntryName = 'OptiScaler.dll'
-$CoreSha       = '22f3677f922969a7dab3f3332075f74f64488fbffb8b98b929b8851c8b5fbcff'
+$CoreSha       = 'e050434cd054ebe0ea43882ff60c2f96755fcc9396fcdd7f709649967469feef'
 $Rc2CoreSha    = '0eab8e59446d126fb25e35f83c87ffdf0fe6a3abb1084e6b480ad18234741c60'  # core inside the legacy rc2 ZIP (SUSEMI_RC2_ZIP mode only)
 $UalStagedRel  = 'tools\asi-loader\Ultimate-ASI-Loader-x64.dll'
 $UalSha        = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'

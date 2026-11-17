@@ -1,16 +1,17 @@
-# One-click install: v11.3-installer-a2
+# One-click install: v11.5
 
 Run `Install_OptiScaler_windows.bat` from the extracted ZIP. One session covers
 language, game EXE selection, diagnosis, advisory, consent, install and result.
 A brief Korean summary follows.
 
-This is an installer release on the unchanged rc2-lineage core, not a new stable
-core or proof of working FG. Don't use the historical rc1 installer/remover;
-a2 keeps the corrected rc2 removal lineage.
+This release bundles the one-click installer with the updated v11.5 core (NR addon
+options in the in-game menu, localized and resizable menu). It is not proof of
+working FG or NR in any specific game or GPU. Don't use the historical rc1
+installer/remover; v11.5 keeps the corrected rc2 removal lineage.
 
 ## Before you start
 
-Extract the complete **v11.3-installer-a2 ZIP** into a separate package folder,
+Extract the complete **v11.5 ZIP** into a separate package folder,
 not over the game or another package. Keep the BAT, `OptiScaler.dll`, `OptiScaler/`,
 `tools/` and licenses together. Don't copy only the BAT. No developer ZIP path
 or download is needed for the default install.
@@ -79,7 +80,7 @@ game, API, GPU, input/output and optional runtimes still matter.
 
 | Problem | Next action |
 | --- | --- |
-| Package missing/hash mismatch | Extract a valid complete a2 ZIP into a new folder. Don't substitute a random DLL. |
+| Package missing/hash mismatch | Extract a valid complete v11.5 ZIP into a new folder. Don't substitute a random DLL. |
 | Missing/wrong EXE or architecture | Select the actual x64 game EXE. |
 | Game running | Close the game and launcher, then retry. |
 | Unknown target, competing loader, directory/reparse conflict | Inspect the named path and existing mod installation. Don't delete it to force installation. |
@@ -190,20 +191,64 @@ mode, failure timing and the full relevant `OptiScaler.log` span around enabling
 and failure. Include same-run module paths/hashes if available. The first 30 log
 lines alone may miss the failure.
 
+## NR handoff changes in v11.5
+
+This core preserves v11.4 menu/features and fixes compatible SR/finished-picture
+extent differences, including MV scaling. Application phase is learned per owner
+and consumer after repeated evidence; exact matches stay first and resets clear it.
+No setting or game-specific preset is added. New integrated gameplay is untested.
+Black Flag visible NR and Dawnwalker lag1 success refer to earlier separate binaries.
+
+### Optional NVIDIA runtime and NR model
+
+The 11-file installer is complete for its bundled core/loader/backend dependencies.
+For NR, separately supply `nvngx_dlssnr.dll` from a source you are entitled to use
+and place it beside the selected game EXE. Enable NR in the OptiScaler menu.
+No NR model or RTX 20/30 MFG payload is redistributed. Compatibility depends on
+the model, driver, GPU and game input; no new support matrix is claimed.
+
+If a required Streamline runtime is not already supplied by your game, the
+included official-source helper can fetch it after your explicit choice:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Get-StreamlineRuntime.ps1 -Action latest -Destination "<game folder>\OptiScaler\streamline"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Get-StreamlineRuntime.ps1 -Action verify -Destination "<game folder>\OptiScaler\streamline"
+```
+
+Replace the example with your actual game folder. The helper records the archive
+digest when supplied by the official release, per-file hashes and Authenticode
+status in `SOURCES.json`; read any verification warning. It does not acquire an
+NR model. The BAT helper defaults to the extracted package folder, so use the
+explicit destination above when preparing a runtime for an installed game.
+Network download and GPU operation were not exercised for this release.
+
+## Validation boundary
+
+| Surface | Evidence |
+| --- | --- |
+| Finished-picture extent / MV / guide bounds | Production CPU regression and 10 detected defect seeds |
+| Exact-first / scoped lag / claim / reset / owner recreation | Actual admission, Cancel and capture-reset CPU paths |
+| Black Flag Resynced | Earlier 43c9b3dd repair: owner confirmed visible application; new v11.5 not game-tested |
+| Dawnwalker | Earlier eab3ee53 lag1 build reported working; new v11.5 not game-tested |
+| Crimson Desert | Same-size CPU regression; no new game run |
+| Ghosting / depth / MV image quality | Not independently accepted for the new integrated build |
+
 ## Your in-game check
 
 After successful install, launch the game yourself only where mod use is allowed.
 Check OptiScaler loads, then verify your selected input/output and required optional
 runtimes in that run. The installer doesn't validate loaded modules, actual ReShade
-order or gameplay/FG compatibility. This installer release isn't stable-core
-promotion or gameplay acceptance.
+order or gameplay/FG compatibility. This release isn't gameplay
+acceptance for any specific game.
 
 ## 설치 요약 (Korean summary)
 
-a2는 기존 rc2 계열 코어를 유지한 설치기 릴리스입니다. 새 안정 코어 승격이나
-게임/FG 성공 기록이 아닙니다.
+v11.5는 크기·MV 변환과 owner별 프레임 인계를 고친 통합판입니다. 기존 메뉴와 설치기를 유지하며 새 통합 DLL의 실기·화질은 미검증입니다. NR 모델은 직접 준비하고, 공식 런타임 도우미는 위의 실제 게임 경로를 지정해 실행하세요.
 
-1. a2 전체 ZIP을 별도 폴더에 풀고 게임과 런처를 종료하세요. BAT만 복사하거나
+v11.5는 설치기와 갱신된 코어(인게임 메뉴의 NR 애드온 옵션, 한글 지원·크기 조절
+메뉴)를 함께 담은 릴리스입니다. 특정 게임/GPU에서의 FG/NR 동작을 보장하지 않습니다.
+
+1. v11.5 전체 ZIP을 별도 폴더에 풀고 게임과 런처를 종료하세요. BAT만 복사하거나
    게임 폴더 위에 압축을 풀지 마세요.
 2. BAT를 실행해 언어와 실제 x64 게임 EXE를 선택하세요. 진단에서 거부하면
    표시된 대상/설정을 확인하고 강제로 덮어쓰지 마세요.

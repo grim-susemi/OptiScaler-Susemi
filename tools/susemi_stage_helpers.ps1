@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
   susemi_stage_helpers.ps1 - private-staging adapter for the approved local Ultimate ASI
@@ -41,7 +41,7 @@ $UalInnerName  = 'dinput8.dll'
 $UalInnerSha   = 'fa266e3513d02c08a1b808f28c10538a489eaffaa4b0707f7cc1066e71b5afd7'
 
 # Byte-exact local rc2 ZIP and the UAL member it carries.
-$Rc2ZipDefault = 'C:/omo-research/susemi-next-ui-lang/.omo/evidence/susemi-xefg-nr-loadorder-release/20260927/task-22/staging/r5/OptiScaler-NR-v11.2-rc2.zip'
+$Rc2ZipDefault = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads\OptiScaler-NR-v11.2-rc2.zip'
 $Rc2ZipSha     = '42bac65ff8d9c2ada98cbcfa9c24753f3fe5253d08f7c956a9df977c0e21cc2a'
 $Rc2UalEntry   = 'tools/asi-loader/Ultimate-ASI-Loader-x64.dll'
 

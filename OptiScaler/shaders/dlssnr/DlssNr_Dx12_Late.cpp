@@ -18,6 +18,7 @@ auto DlssNr_Dx12::State::LateContext::Finished(const Slot& slot) -> bool
 
 auto DlssNr_Dx12::State::LateContext::Cancel() -> void
 {
+    lag.Reset();
     for (auto& slot : slots)
     {
         // Presentation invalidation only. The game command list that recorded into the
@@ -183,6 +184,8 @@ auto DlssNr_Dx12::State::LateContext::Capture(ID3D12GraphicsCommandList* cmd, NV
     params->Get(NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags, &flags);
     params->Get(NVSDK_NGX_Parameter_Reset, &gameReset);
     frame.Reset = gameReset != 0;
+    if (frame.Reset)
+        lag.Reset();
     params->Get(NVSDK_NGX_Parameter_FrameTimeDeltaInMsec, &frame.FrameTimeMs);
     frame.DepthInverted = (flags & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) != 0;
     frame.MotionVectorsLowResolution = (flags & NVSDK_NGX_DLSS_Feature_Flags_MVLowRes) != 0;
@@ -287,6 +290,8 @@ auto DlssNr_Dx12::State::LateContext::CaptureResidual(ID3D12GraphicsCommandList*
         slot.responseValid = false;
     slot.frame = {};
     slot.frame.Reset = reset;
+    if (reset)
+        lag.Reset();
     slot.frame.OutputWidth = (unsigned) clean->GetDesc().Width;
     slot.frame.OutputHeight = clean->GetDesc().Height;
     slot.frame.PreExposure = scale;
