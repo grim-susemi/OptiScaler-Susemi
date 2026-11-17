@@ -120,8 +120,8 @@ Record 'previous-v11.4-pin' ((Sha "$previous\OptiScaler.dll") -eq $OLD) 'real pr
 $exe=NewGame 'upgrade'; $dir=Split-Path -Parent $exe
 [IO.File]::WriteAllText("$dir\OptiScaler.ini","[Log]`r`nLogToFile=false`r`n; USER-KEEP`r`n")
 $before=MapGame $dir
-$old=RunInstaller $previous ('install -Exe "' + $exe + '" -Consent yes -Lang en') 'previous-install'
-Record 'previous-install' ($old.exit -eq 0 -and (Sha "$dir\OptiScaler.asi") -eq $OLD) 'v11.4 installed through its actual BAT'
+$previousInstall=RunInstaller $previous ('install -Exe "' + $exe + '" -Consent yes -Lang en') 'previous-install'
+Record 'previous-install' ($previousInstall.exit -eq 0 -and (Sha "$dir\OptiScaler.asi") -eq $OLD) 'v11.4 installed through its actual BAT'
 $upgrade=RunInstaller $package ('install -Exe "' + $exe + '" -Consent yes -Lang en') 'upgrade-install'
 Record 'v11.4-upgrade' ($upgrade.exit -eq 0 -and (Sha "$dir\OptiScaler.asi") -eq $NEW -and
   $upgrade.text -match 'setup_verified=11') 'new core, preserved linked transaction lineage'

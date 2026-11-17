@@ -207,6 +207,13 @@ and place it beside the selected game EXE. Enable NR in the OptiScaler menu.
 No NR model or RTX 20/30 MFG payload is redistributed. Compatibility depends on
 the model, driver, GPU and game input; no new support matrix is claimed.
 
+Existing model provenance and the historical 310.8 file identities are retained
+in [runtime identification](https://github.com/grim-susemi/OptiScaler-Susemi/blob/dlss-neural-rendering/INSTALL-DLSSNR.md#runtime-identification),
+including the original NVIDIA and community compatibility references. Use the
+installation steps in this guide; the linked older manual quick start is not
+the v11.5 installation flow. Check a separately supplied model with
+`Get-FileHash .\nvngx_dlssnr.dll -Algorithm SHA256` before enabling it.
+
 If a required Streamline runtime is not already supplied by your game, the
 included official-source helper can fetch it after your explicit choice:
 
