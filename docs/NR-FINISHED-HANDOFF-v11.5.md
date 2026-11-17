@@ -52,6 +52,10 @@ Ten seeded defects must fail at their intended assertion: admission bypass,
 MV scaling, source mutation, aspect/bounds bypass, unused prepared frame,
 process-global learning and missing cancellation/capture reset.
 
+Packaging reads committed blobs while preserving unchanged archive members.
+All Windows BATs use CRLF. The extracted-package E2E checks that transport
+before executing the actual installer, including fresh/no-op/upgrade/removal.
+
 | Game / evidence | Earlier observed result | Unified v11.5 |
 | --- | --- | --- |
 | Black Flag Resynced, `43c9b3dd` | Owner confirmed visible NR; observed APPLY continued after feature recreation | Extent and identity CPU regressions passed; new integrated binary not game-tested |

@@ -56,12 +56,14 @@ function RunInstaller($package,$arguments,$name) {
   $process.StandardInput.Close()
   $stdout=$process.StandardOutput.ReadToEndAsync()
   $stderr=$process.StandardError.ReadToEndAsync()
-  if (-not $process.WaitForExit(60000)) {
-    $process.Kill()
-    throw "Installer exceeded 60 seconds: $name"
+  $timedOut = -not $process.WaitForExit(60000)
+  if ($timedOut) {
+    & taskkill.exe /PID $process.Id /T /F | Out-Null
+    $null=$process.WaitForExit(5000)
   }
   $text=$stdout.Result + "`n--- stderr ---`n" + $stderr.Result
   Set-Content -LiteralPath (Join-Path $Evidence "$name.log") -Value $text -Encoding UTF8
+  if ($timedOut) { throw "Installer exceeded 60 seconds: $name; output preserved" }
   return [pscustomobject]@{exit=$process.ExitCode; text=$text}
 }
 
@@ -80,6 +82,10 @@ Record 'complete-manifest' ($members.Count -eq 29 -and $listed.Count -eq 29 -and
   @($members | Where-Object { -not $listed.ContainsKey($_) }).Count -eq 0) 'all 30 ZIP members, no unlisted/absent/bad hash'
 Record 'core-and-UAL' ((Sha (Join-Path $package 'OptiScaler.dll')) -eq $NEW -and
   (Sha (Join-Path $package 'tools\asi-loader\Ultimate-ASI-Loader-x64.dll')) -eq $UAL) 'trusted core and UAL pins'
+foreach ($bat in (Get-ChildItem -LiteralPath $package -Filter '*.bat')) {
+  $text=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($bat.FullName))
+  Record ('CRLF-' + $bat.Name) (-not [regex]::IsMatch($text,"(?<!`r)`n")) 'Windows batch transport preserved'
+}
 foreach ($ps in (Get-ChildItem -LiteralPath "$package\tools" -Filter '*.ps1')) {
   $tokens=$null; $parseErrors=$null
   [Management.Automation.Language.Parser]::ParseFile($ps.FullName,[ref]$tokens,[ref]$parseErrors) | Out-Null

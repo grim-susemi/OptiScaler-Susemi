@@ -77,7 +77,13 @@ def main() -> None:
     del payload["OptiScaler/dlssnr/README.md"]
     payload["OptiScaler.dll"] = core
     for name in SOURCES:
-        payload[name] = git(repo, "show", f"{revision}:{name}")
+        data = git(repo, "show", f"{revision}:{name}")
+        if name in payload and data.replace(b"\r\n", b"\n") == payload[name].replace(b"\r\n", b"\n"):
+            data = payload[name]
+        # cmd.exe batch parsing, particularly labels, requires the Windows transport.
+        if name.lower().endswith(".bat"):
+            data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        payload[name] = data
     require(CORE_SHA.encode() in payload["tools/susemi_installer.ps1"],
             "Installer core pin differs from the built artifact")
     payload["RELEASE-MANIFEST.json"] = (json.dumps({
@@ -89,9 +95,13 @@ def main() -> None:
         "core_build_label": "v11.5-unified-lag-extent",
         "integrated_gpu_gameplay_tested": False,
         "nvidia_model_binaries_bundled": False,
+        "windows_batch_line_endings": "CRLF",
     }, indent=2) + "\n").encode()
     del payload["SHA256SUMS.txt"]
     for name, data in payload.items():
+        if name.lower().endswith(".bat"):
+            require(re.search(rb"(?<!\r)\n", data) is None,
+                    f"Non-Windows batch transport: {name}")
         require(".." not in Path(name).parts and not name.startswith(("/", "\\")),
                 f"Unsafe member: {name}")
         require(not re.search(r"(?:^|/)(?:tests?|external|SDK|\.git|\.omo)(?:/|$)"
